@@ -1,12 +1,11 @@
 -- =============================================================================
 -- qry_CUTSHEET_BOM_Summary
 -- =============================================================================
--- Aggregates tbl_tmp_CUTSHEET_BOM (bom_MECH) per Serial.
+-- Aggregates tbl_tmp_CUTSHEET_BOM (bom_MECH equivalent).
+-- The table always contains a single serial's worth of data, so no GROUP BY.
 --
 -- ASSUMPTIONS / PREREQUISITES
 --   1. tbl_tmp_CUTSHEET_BOM must have a [Total Cost] field (Numeric).
---      Add it as a computed/stored column, or populate it via a look-up query
---      before running this query.
 --   2. [Purch] is DERIVED here as Department IN ('STOCK','SPECIAL ORDER').
 --      If a separate Purch boolean column is added later, replace the
 --      Department-based condition with  b.Purch = TRUE / FALSE.
@@ -23,12 +22,9 @@
 --   STOCK_MFG_QTY / COST     – internal mfg stock (StockedPartNumber 8x/9x)
 --   TOTAL_QTY                – all non-assembly part quantities
 --   MFG_ZERO_QTY             – mfg-dept parts where Total Cost = 0 (need est.)
---   AVG_MFG_COST             – average cost across mfg depts (for $0 estimate)
 -- =============================================================================
 
 SELECT
-    b.Serial,
-
     -- ── STOCK (PURCH) ──────────────────────────────────────────────────────────
     -- Department = 'STOCK', StockedPartNumber does NOT start with '8' or '9'
     SUM(IIF(b.Department = 'STOCK'
@@ -94,7 +90,7 @@ SELECT
         AND Left(Trim(Nz(b.StockedPartNumber, '')), 1) IN ('8', '9'),
         Nz(b.[Total Cost], 0), 0))                            AS STOCK_MFG_COST,
 
-    -- ── TOTAL QTY (non-assembly) ────────────────────────────────────────────────
+    -- ── TOTAL QTY (non-assembly) ───────────────────────────────────────────────
     SUM(IIF(Left(Nz(b.PART_NUMBER, ''), 1) <> 'A',
         Nz(b.QTY, 0), 0))                                     AS TOTAL_QTY,
 
@@ -104,8 +100,7 @@ SELECT
         AND b.Department IN ('PUNCH', 'LATHE', 'MILL', 'ROUTER', 'SHEAR'),
         Nz(b.QTY, 0), 0))                                     AS MFG_ZERO_QTY
 
-FROM tbl_tmp_CUTSHEET_BOM AS b
-GROUP BY b.Serial;
+FROM tbl_tmp_CUTSHEET_BOM AS b;
 
 
 -- =============================================================================
@@ -126,8 +121,6 @@ GROUP BY b.Serial;
 -- =============================================================================
 
 SELECT
-    s.Serial,
-
     s.STOCK_PURCH_QTY,
     s.STOCK_PURCH_COST,
     s.SP_QTY,
