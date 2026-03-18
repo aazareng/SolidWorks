@@ -43,7 +43,10 @@ On Error GoTo Failure
 
     Debug.Print "Drawing view: " & swView.Name
 
+    Dim sStep As String
+
     ' --- 3. Get the referenced assembly and its root component ----------------
+    sStep = "getting referenced document"
     Dim swRefDoc As SldWorks.ModelDoc2
     Set swRefDoc = swView.ReferencedDocument
     If swRefDoc Is Nothing Then
@@ -51,11 +54,13 @@ On Error GoTo Failure
         GoTo Failure
     End If
 
+    sStep = "checking referenced document type (type=" & swRefDoc.GetType() & ")"
     If swRefDoc.GetType() <> swDocASSEMBLY Then
         Debug.Print "Referenced document is not an assembly."
         GoTo Failure
     End If
 
+    sStep = "getting configuration '" & swView.ReferencedConfiguration & "'"
     Dim swConfig As SldWorks.Configuration
     Set swConfig = swRefDoc.GetConfigurationByName(swView.ReferencedConfiguration)
     If swConfig Is Nothing Then
@@ -63,6 +68,7 @@ On Error GoTo Failure
         GoTo Failure
     End If
 
+    sStep = "getting root component"
     Dim swRoot As SldWorks.Component2
     Set swRoot = swConfig.GetRootComponent3(True)
     If swRoot Is Nothing Then
@@ -71,13 +77,15 @@ On Error GoTo Failure
     End If
 
     ' --- 4. Traverse the tree and show any explicitly hidden components -------
+    sStep = "traversing components"
     TraverseComponents swRoot, swView, swDoc
 
     swDoc.GraphicsRedraw2
 
     Exit Sub
 Failure:
-    Debug.Print "ShowExplicitlyHiddenComponents failed (Err " & Err.Number & "): " & Err.Description
+    Debug.Print "Failed at step: " & sStep
+    Debug.Print "Error " & Err.Number & ": " & Err.Description
 End Sub
 
 ' Recursively walks the component tree.  For each component that is explicitly
@@ -98,6 +106,7 @@ Private Sub TraverseComponents(swComp As SldWorks.Component2, _
         Dim swDrawComp As SldWorks.DrawingComponent
         Set swDrawComp = swChild.GetDrawingComponent(swView)
 
+        Debug.Print "  Checking: " & swChild.Name2
         If Not swDrawComp Is Nothing Then
             Dim bVisInView  As Boolean
             Dim bHidInModel As Boolean
