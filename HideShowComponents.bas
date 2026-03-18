@@ -22,22 +22,38 @@ On Error GoTo Failure
 
     Debug.Print "Drawing view: " & swView.Name
 
+    Dim swDraw As SldWorks.DrawingDoc
+    Set swDraw = swDoc
+
+    ' Activate the view — required so component selections resolve in view context
+    swDraw.ActivateView swView.Name
+
     Dim vComps As Variant
-    vComps = swView.GetHiddenComponents
+    vComps = swView.GetHiddenComponents(False)
     If IsEmpty(vComps) Then
         Debug.Print "  No hidden components found."
+        swDraw.ActivateView ""
         Exit Sub
     End If
 
-    Dim vComp   As Variant
-    Dim swComp  As SldWorks.Component2
-    Dim bResult As Boolean
+    swDoc.ClearSelection2 True
+
+    Dim vComp  As Variant
+    Dim swComp As SldWorks.Component2
+    Dim bFirst As Boolean
+    bFirst = True
     For Each vComp In vComps
         Set swComp = vComp
-        bResult = swView.HideShowComponent(swComp, True)
-        Debug.Print "  Shown: " & swComp.Name2 & IIf(bResult, "", "  (returned False)")
+        ' Select4 (not Select) is required for drawing-context components
+        swComp.Select4 Not bFirst, Nothing, False
+        bFirst = False
+        Debug.Print "  Selected: " & swComp.Name2
     Next
 
+    ' ShowComponent2 acts on all currently selected components
+    swDoc.ShowComponent2
+
+    swDraw.ActivateView ""
     swDoc.GraphicsRedraw2
     Exit Sub
 
