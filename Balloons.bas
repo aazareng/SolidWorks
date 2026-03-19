@@ -8,17 +8,11 @@ Function GetUnballooned(swView As SldWorks.View) As Variant
     Set swApp  = Application.SldWorks
     Set swDraw = swApp.ActiveDoc
 
-    ' Find the first BOM feature on the drawing
+    Dim swSheet As SldWorks.sheet
+    Set swSheet = swDraw.GetCurrentSheet()
+
     Dim swBOMFeat As SldWorks.BomFeature
-    Dim swFeat    As SldWorks.Feature
-    Set swFeat = swDraw.FirstFeature()
-    Do While Not swFeat Is Nothing
-        If swFeat.GetTypeName2() = "BomFeat" Then
-            Set swBOMFeat = swFeat.GetSpecificFeature2()
-            Exit Do
-        End If
-        Set swFeat = swFeat.GetNextFeature()
-    Loop
+    Set swBOMFeat = GetBomFeature(swSheet)
 
     If swBOMFeat Is Nothing Then GetUnballooned = Empty: Exit Function
 
@@ -29,24 +23,21 @@ Function GetUnballooned(swView As SldWorks.View) As Variant
     Dim swTableAnn As SldWorks.TableAnnotation
     Set swTableAnn = vTAnns(0)
 
-    ' ReferencedConfiguration is required by GetComponents2; "" fails on most assemblies
-    Dim strConfig As String
-    strConfig = swView.ReferencedConfiguration
-
     Dim vAnn As Variant
     vAnn = GetBalloonVals(swDraw)
 
     Dim vComps As Variant
     ReDim vComps(swTableAnn.RowCount - 1)
-    Dim nCount As Long
-    Dim i      As Long
+    Dim nCount    As Long
+    Dim i         As Long
+    Dim swComp    As SldWorks.Component2
+    Dim strConfig As String
     For i = 1 To swTableAnn.RowCount - 1
+        If Not swComp Is Nothing Then strConfig = swComp.ReferencedConfiguration Else strConfig = ""
+        Set swComp = GetFirstComponentInRow(swTableAnn, i, strConfig)
         If Not IsInArray(swTableAnn.Text(i, 0), vAnn) Then
-            Dim vRowComps As Variant
-            vRowComps = swTableAnn.GetComponents2(i, strConfig)
-            If IsEmpty(vRowComps) Then vRowComps = swTableAnn.GetComponents2(i, "")
-            If Not IsEmpty(vRowComps) Then
-                Set vComps(nCount) = vRowComps(0)
+            If Not swComp Is Nothing Then
+                Set vComps(nCount) = swComp
                 nCount = nCount + 1
             End If
         End If
@@ -60,6 +51,13 @@ Success:
 Failure:
     GetUnballooned = Empty
     Stop
+End Function
+
+Function GetFirstComponentInRow(swTableAnn As SldWorks.TableAnnotation, nRow As Long, strConfig As String) As SldWorks.Component2
+    Dim vComps As Variant
+    vComps = swTableAnn.GetComponents2(nRow, strConfig)
+    If IsEmpty(vComps) Then vComps = swTableAnn.GetComponents2(nRow, "")
+    If Not IsEmpty(vComps) Then Set GetFirstComponentInRow = vComps(0)
 End Function
 
 ' Returns a String array of item-number text for every balloon in the drawing
