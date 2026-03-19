@@ -1,7 +1,7 @@
 Attribute VB_Name = "Balloons"
 Option Explicit
 
-Function GetUnballooned() As Variant
+Function GetUnballooned(swView As SldWorks.View) As Variant
     Dim swApp  As SldWorks.SldWorks
     Dim swDraw As SldWorks.DrawingDoc
     Set swApp  = Application.SldWorks
@@ -29,10 +29,8 @@ Function GetUnballooned() As Variant
     Set swTableAnn = vTAnns(0)
 
     ' ReferencedConfiguration is required by GetComponents2; "" fails on most assemblies
-    Dim swView    As SldWorks.View
     Dim strConfig As String
-    Set swView = swDraw.GetFirstView().GetNextView()  ' skip sheet-format placeholder
-    If Not swView Is Nothing Then strConfig = swView.ReferencedConfiguration
+    strConfig = swView.ReferencedConfiguration
 
     Dim vAnn As Variant
     vAnn = GetBalloonVals(swDraw)
