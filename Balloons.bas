@@ -37,6 +37,7 @@ Function GetUnballooned(swView As SldWorks.View) As Variant
     vAnn = GetBalloonVals(swDraw)
 
     Dim vComps As Variant
+    ReDim vComps(swTableAnn.RowCount - 1)
     Dim nCount As Long
     Dim i      As Long
     For i = 1 To swTableAnn.RowCount - 1
@@ -45,12 +46,12 @@ Function GetUnballooned(swView As SldWorks.View) As Variant
             vRowComps = swTableAnn.GetComponents2(i, strConfig)
             If IsEmpty(vRowComps) Then vRowComps = swTableAnn.GetComponents2(i, "")
             If Not IsEmpty(vRowComps) Then
-                ReDim Preserve vComps(nCount)
                 Set vComps(nCount) = vRowComps(0)
                 nCount = nCount + 1
             End If
         End If
     Next i
+    ReDim Preserve vComps(nCount - 1)
 
     If nCount = 0 Then GoTo Failure
 Success:
