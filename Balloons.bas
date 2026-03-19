@@ -2,6 +2,7 @@ Attribute VB_Name = "Balloons"
 Option Explicit
 
 Function GetUnballooned(swView As SldWorks.View) As Variant
+    On Error GoTo Failure
     Dim swApp  As SldWorks.SldWorks
     Dim swDraw As SldWorks.DrawingDoc
     Set swApp  = Application.SldWorks
@@ -35,9 +36,9 @@ Function GetUnballooned(swView As SldWorks.View) As Variant
     Dim vAnn As Variant
     vAnn = GetBalloonVals(swDraw)
 
-    Dim vComps() As SldWorks.Component2
-    Dim nCount   As Long
-    Dim i        As Long
+    Dim vComps As Variant
+    Dim nCount As Long
+    Dim i      As Long
     For i = 1 To swTableAnn.RowCount - 1
         If Not IsInArray(swTableAnn.Text(i, 0), vAnn) Then
             Dim vRowComps As Variant
@@ -51,7 +52,13 @@ Function GetUnballooned(swView As SldWorks.View) As Variant
         End If
     Next i
 
-    If nCount = 0 Then GetUnballooned = Empty Else GetUnballooned = vComps
+    If nCount = 0 Then GoTo Failure
+Success:
+    GetUnballooned = vComps
+    Exit Function
+Failure:
+    GetUnballooned = Empty
+    Stop
 End Function
 
 ' Returns a String array of item-number text for every balloon in the drawing
