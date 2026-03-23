@@ -5,11 +5,11 @@ Usage:
     python generate.py --config templates/machine_config_template.xlsx
 
 Requirements:
-    pip install python-pptx python-docx openpyxl Pillow
-    LibreOffice must be installed for PPTX → image conversion:
-        Linux:   sudo apt install libreoffice
-        macOS:   brew install --cask libreoffice
-        Windows: https://www.libreoffice.org/download/
+    pip install python-pptx python-docx openpyxl Pillow pywin32
+
+    pywin32 drives PowerPoint via Windows COM — no LibreOffice required.
+    PowerPoint must be installed on the machine running this script
+    (which it already is on documentation PCs).
 
 Folder layout expected:
     /
@@ -36,7 +36,6 @@ import argparse
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -47,7 +46,12 @@ from pptx.util import Inches
 from docx import Document
 from docx.shared import Inches as DInches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from PIL import Image
+
+try:
+    import win32com.client as win32
+    _WIN32_AVAILABLE = True
+except ImportError:
+    _WIN32_AVAILABLE = False
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -130,24 +134,38 @@ def load_config(xlsx_path: Path) -> dict:
 # PPTX → IMAGES  (via LibreOffice headless)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _libreoffice_export_slides(pptx_path: Path, out_dir: Path) -> list[Path]:
+def _pptx_export_slides_com(pptx_path: Path, out_dir: Path) -> list[Path]:
     """
-    Calls LibreOffice headless to export each slide of pptx_path as a PNG.
+    Export each slide of pptx_path as a 1920×1080 PNG using PowerPoint COM
+    automation (Windows only, requires pywin32 + PowerPoint installed).
     Returns list of PNG paths sorted by slide number.
     """
-    cmd = [
-        "libreoffice", "--headless", "--convert-to", "png",
-        "--outdir", str(out_dir), str(pptx_path)
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
+    if not _WIN32_AVAILABLE:
         raise RuntimeError(
-            f"LibreOffice failed on {pptx_path}:\n{result.stderr}"
+            "pywin32 is not installed. Run:  pip install pywin32\n"
+            "PowerPoint must also be installed on this machine."
         )
-    # LibreOffice names them  <stem>1.png, <stem>2.png, ...
-    stem = pptx_path.stem
-    pngs = sorted(out_dir.glob(f"{stem}*.png"),
-                  key=lambda p: int(re.search(r"(\d+)$", p.stem).group(1)))
+
+    pptx_abs = str(pptx_path.resolve())
+    out_abs  = str(out_dir.resolve())
+
+    ppt = win32.Dispatch("PowerPoint.Application")
+    ppt.Visible = True          # some PowerPoint versions require a visible window
+
+    try:
+        prs = ppt.Presentations.Open(pptx_abs, ReadOnly=True,
+                                      Untitled=False, WithWindow=False)
+        n = prs.Slides.Count
+        for i in range(1, n + 1):
+            out_png = os.path.join(out_abs, f"slide{i:04d}.png")
+            # Export(path, filter, scaleWidth, scaleHeight)
+            prs.Slides(i).Export(out_png, "PNG", 1920, 1080)
+        prs.Close()
+    finally:
+        ppt.Quit()
+
+    pngs = sorted(out_dir.glob("slide*.png"),
+                  key=lambda p: int(re.search(r"(\d+)", p.stem).group(1)))
     return pngs
 
 
@@ -207,7 +225,7 @@ def extract_module_images(module_folder: Path, tmp_root: Path) -> dict:
     tmp_dir = tmp_root / module_folder.name
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    png_paths = _libreoffice_export_slides(pptx_path, tmp_dir)
+    png_paths = _pptx_export_slides_com(pptx_path, tmp_dir)
     meta      = _get_slide_meta(pptx_path)
 
     if len(png_paths) != len(meta):
