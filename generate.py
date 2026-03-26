@@ -1,38 +1,49 @@
 """
-generate.py — Polypack Manual Generation Script
-================================================
+generate.py v2 — Polypack Manual Generation Script
+===================================================
 Usage:
-    python generate.py --config templates/machine_config_template.xlsx
+    python generate.py --config "4628 - Pinturas Berel - Clearprint-24L.xlsx"
+
+    # Dump extracted data as JSON (no Word doc generated — useful for debugging
+    # and as a future web-API hook):
+    python generate.py --config <xlsx> --json
 
 Requirements:
-    pip install python-pptx python-docx openpyxl Pillow pywin32
+    pip install python-docx openpyxl Pillow pywin32
 
-    pywin32 drives PowerPoint via Windows COM — no LibreOffice required.
-    PowerPoint must be installed on the machine running this script
-    (which it already is on documentation PCs).
+    pywin32 + Excel (Windows) required only for image capture
+    (PHYSICAL, LUBRICATION, and SCREENS screenshots).
+    All other sections work without Excel installed.
 
-Folder layout expected:
-    /
-    ├── generate.py
-    ├── template.docx                  ← master Word template
-    ├── templates/
-    │   ├── machine_config_template.xlsx
-    │   └── module_template.pptx
-    ├── modules/
-    │   ├── infeed_conveyor/
-    │   │   └── slides.pptx            ← filled-in copy of module_template.pptx
-    │   ├── seal_bar/
-    │   │   └── slides.pptx
-    │   └── ...
-    └── output/                        ← generated manuals land here
+Architecture (web-ready):
+    load_data(xlsx)          → JSON-serializable dict   ← future API endpoint
+    capture_images(xlsx, data, out_dir) → {key: Path}   ← COM, Windows-only
+    build_document(data, images, template, out_path)    ← produces .docx
 
-PPTX slide conventions (read from slide notes):
-    SKIP=TRUE           → divider / instructions slide, ignored
-    TYPE=OVERVIEW       → exported as Section 5 image
-    TYPE=CHANGEOVER     → exported as Section 7 image; notes body = step text
+Document sections:
+    1. Cover          ← SUMMARY machine info (text substitution)
+    2. Modules        ← MOD_1…MOD_N BOM tables
+    3. PM             ← PM sheet, USE=True rows, cols B:E
+    4. Faults         ← FAULTS sheet, cols A:C
+    5. HMI Params     ← HMI sheet (full table)
+    6. HMI Screens    ← SCREENS sheet (COM-captured images + option tables)
+    7. Setpoints      ← PHYSICAL sheet (single COM image)
+    8. Lubrication    ← LUBRICATION sheet (single COM image)
+    9. VFD Params     ← sheet matching HMI brand in SUMMARY
+
+Future web-API notes:
+    - load_data() returns a plain dict; call json.dumps(data) to serve it.
+    - build_document() accepts that dict, so the web layer only needs to:
+        1. Receive/store the Excel file (or accept the dict directly)
+        2. Call load_data() → optionally edit fields → build_document()
+    - capture_images() is the only Windows-specific piece; a future cloud
+      deployment could replace it with a LibreOffice or headless-Chrome renderer.
 """
 
+from __future__ import annotations
+
 import argparse
+import json
 import os
 import re
 import shutil
@@ -41,8 +52,7 @@ import tempfile
 from pathlib import Path
 
 import openpyxl
-from pptx import Presentation
-from pptx.util import Inches
+from openpyxl.utils import get_column_letter
 from docx import Document
 from docx.shared import Inches as DInches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -58,202 +68,493 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 
 TEMPLATE_DOCX = Path("template.docx")
-MODULES_DIR   = Path("modules")
 OUTPUT_DIR    = Path("output")
 
-MODULE_PLACEHOLDER = "xXxMODULExXx"
+# SCREENS sheet layout
+SCREENS_NAME_ROW = 1    # screen names
+SCREENS_IMG_ROW  = 2    # "Place in Cell" images
+SCREENS_HDR_ROW  = 3    # OPTION / DESCRIPTION headers
+SCREENS_DATA_ROW = 4    # option rows start here
+
+# Map HMI brand (upper-cased) → VFD sheet name
+VFD_SHEET_MAP: dict[str, str] = {
+    "SCHNEIDER": "SCHNEIDER",
+    "AB":        "AB",
+    "ALLEN-BRADLEY": "AB",
+    "POWERFLEX": "POWERFLEX",
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIG LOADING  (reads machine_config_template.xlsx)
+# DATA LOADING
+# Returns a JSON-serializable dict — the single source for both document
+# building and any future REST/web-API layer.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_config(xlsx_path: Path) -> dict:
+def load_data(xlsx_path: Path) -> dict:
     """
-    Returns a dict with keys:
-        machine   : {CUSTOMER, MODEL, SERIAL NUMBER, MANUAL DATE, YEAR (YY), ...film specs...}
-        modules   : list of {order, folder, display_name, include, co_include, description}
-        bom_sheets: {folder_name: [{ITEM #, PART NUMBER, DESCRIPTION, QTY, MATERIAL, VENDOR, NOTES}]}
+    Load all manual content from the machine Excel workbook.
+
+    Returns a JSON-serializable dict with keys:
+        machine, modules, pm, faults, hmi, screens, vfd,
+        physical, lubrication
     """
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
-
-    # ── MACHINE INFO sheet ────────────────────────────────────────────────────
-    ws = wb["MACHINE INFO"]
-    machine = {}
-    for row in ws.iter_rows(min_row=4, values_only=True):
-        if row[0] and row[1] is not None:
-            machine[str(row[0]).strip()] = str(row[1]).strip() if row[1] else ""
-
-    # ── MODULES sheet ─────────────────────────────────────────────────────────
-    wm = wb["MODULES"]
-    modules = []
-    for row in wm.iter_rows(min_row=4, values_only=True):
-        if not row[0]:          # empty order cell → end of list
-            continue
-        order, folder, display, include, co_inc, desc = (row + (None,) * 6)[:6]
-        if folder:
-            modules.append({
-                "order":        int(order) if order else 99,
-                "folder":       str(folder).strip(),
-                "display_name": str(display).strip() if display else str(folder).strip(),
-                "include":      str(include).strip().upper() == "TRUE",
-                "co_include":   str(co_inc).strip().upper() == "TRUE" if co_inc else False,
-                "description":  str(desc).strip() if desc else "",
-            })
-    modules.sort(key=lambda m: m["order"])
-
-    # ── BOM sheets (any sheet whose name starts with "BOM") ───────────────────
-    bom_data = {}
-    for sheet_name in wb.sheetnames:
-        if not sheet_name.upper().startswith("BOM"):
-            continue
-        ws_bom = wb[sheet_name]
-        # Row 3, col 2 = module folder name
-        folder_key = ws_bom.cell(row=3, column=2).value
-        if not folder_key:
-            continue
-        folder_key = str(folder_key).strip()
-        rows = []
-        for row in ws_bom.iter_rows(min_row=6, values_only=True):
-            if not any(row):
-                continue
-            rows.append({
-                "item":        row[0] or "",
-                "part_number": row[1] or "",
-                "description": row[2] or "",
-                "qty":         row[3] or "",
-                "material":    row[4] or "",
-                "vendor":      row[5] or "",
-                "notes":       row[6] or "",
-            })
-        bom_data[folder_key] = rows
-
-    return {"machine": machine, "modules": modules, "bom": bom_data}
+    return {
+        "machine":     _load_machine(wb),
+        "modules":     _load_modules(wb),
+        "pm":          _load_pm(wb),
+        "faults":      _load_faults(wb),
+        "hmi":         _load_hmi(wb),
+        "screens":     _load_screens(wb),
+        "vfd":         _load_vfd(wb),
+        "physical":    _load_sheet_meta(wb, "PHYSICAL"),
+        "lubrication": _load_sheet_meta(wb, "LUBRICATION"),
+    }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PPTX → IMAGES  (via LibreOffice headless)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _pptx_export_slides_com(pptx_path: Path, out_dir: Path) -> list[Path]:
+def _load_machine(wb) -> dict:
     """
-    Export each slide of pptx_path as a 1920×1080 PNG using PowerPoint COM
-    automation (Windows only, requires pywin32 + PowerPoint installed).
-    Returns list of PNG paths sorted by slide number.
+    SUMMARY sheet rows 2-15: col A = field name, col B = value.
+    Returns flat dict of all key→value pairs found.
+    """
+    ws = wb["SUMMARY"]
+    machine: dict[str, str] = {}
+    for row in ws.iter_rows(min_row=2, max_row=15, values_only=True):
+        key = row[0]
+        val = row[1]
+        if key and val is not None:
+            k = str(key).strip().rstrip(":")
+            machine[k] = str(val).strip() if val is not None else ""
+    return machine
+
+
+def _load_modules(wb) -> list[dict]:
+    """
+    Load every MOD_N sheet as a module with BOM rows.
+    Sheet structure:
+        Row 4 col B: module display name
+        Row 6: column headers (ITEM #, DESCRIPTION, PART #, CONFIG, QTY)
+        Row 7+: BOM data
+    """
+    modules: list[dict] = []
+    for sheet_name in wb.sheetnames:
+        if not re.match(r"^MOD_\d+$", sheet_name, re.IGNORECASE):
+            continue
+        ws = wb[sheet_name]
+
+        # Display name is in row 4, col B
+        display_name = ws.cell(row=4, column=2).value
+        display_name = str(display_name).strip() if display_name else sheet_name
+
+        # BOM: header row 6, data rows 7+
+        bom: list[dict] = []
+        for row in ws.iter_rows(min_row=7, values_only=True):
+            item, desc, part, config, qty = (list(row) + [None] * 5)[:5]
+            if item is None and desc is None:
+                continue
+            # CONFIG cells may be stored as datetime.time (gear-ratio artefact)
+            config_str = ""
+            if config is not None:
+                import datetime
+                if isinstance(config, datetime.time):
+                    config_str = f"{config.hour}:{config.minute}"
+                else:
+                    config_str = str(config).strip()
+            bom.append({
+                "item":        str(item).strip()   if item   is not None else "",
+                "description": str(desc).strip()   if desc   is not None else "",
+                "part_number": str(part).strip()   if part   is not None else "",
+                "config":      config_str,
+                "qty":         str(qty).strip()    if qty    is not None else "",
+            })
+
+        modules.append({
+            "sheet":        sheet_name,
+            "display_name": display_name,
+            "bom":          bom,
+        })
+
+    modules.sort(key=lambda m: int(re.search(r"\d+", m["sheet"]).group()))
+    return modules
+
+
+def _load_pm(wb) -> list[dict]:
+    """
+    PM sheet: USE=True rows only, cols A-E (USE, ITEM, TASK, FREQUENCY, IMG).
+    IMG values that are formula errors are returned as empty string.
+    """
+    ws = wb["PM"]
+    pm: list[dict] = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        use, item, task, freq, img = (list(row) + [None] * 5)[:5]
+        # Normalise USE: accept True, "TRUE", "YES", "1"
+        if isinstance(use, bool):
+            include = use
+        elif isinstance(use, str):
+            include = use.strip().upper() in ("TRUE", "YES", "1")
+        else:
+            include = False
+        if not include:
+            continue
+
+        # Normalise IMG: drop formula-error strings
+        img_val = ""
+        if img is not None and not str(img).startswith("#"):
+            img_val = str(img).strip()
+
+        pm.append({
+            "item":      str(item).strip() if item else "",
+            "task":      str(task).strip() if task else "",
+            "frequency": str(freq).strip() if freq else "",
+            "img":       img_val,
+        })
+    return pm
+
+
+def _load_faults(wb) -> list[dict]:
+    """FAULTS sheet: cols A-C only (NUMBER, NAME, SEVERITY)."""
+    ws = wb["FAULTS"]
+    faults: list[dict] = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        num, name, severity = (list(row) + [None] * 3)[:3]
+        if num is None and name is None:
+            continue
+        faults.append({
+            "number":   str(num).strip()      if num      is not None else "",
+            "name":     str(name).strip()     if name     is not None else "",
+            "severity": str(severity).strip() if severity is not None else "",
+        })
+    return faults
+
+
+def _load_hmi(wb) -> dict:
+    """
+    HMI sheet: load as a table.
+    Row 1: product name headers (col B onward)
+    Row 2: product descriptions
+    Row 3: OPTION/BUTTON | VALUE headers
+    Row 4+: parameter rows
+    """
+    ws = wb["HMI"]
+    all_rows: list[list] = []
+    for row in ws.iter_rows(values_only=True):
+        cells = [str(c).strip() if c is not None else "" for c in row]
+        if any(cells):
+            all_rows.append(cells)
+    return {"rows": all_rows}
+
+
+def _load_screens(wb) -> list[dict]:
+    """
+    SCREENS sheet.
+    Row 1: screen names at 1-indexed cols 2, 5, 8, … (every 3rd starting at 2).
+    Row 2: "Place in Cell" image per screen (captured via COM).
+    Row 3: OPTION / DESCRIPTION column headers.
+    Row 4+: per-option data.
+        col 3n-2: include checkbox (True/False)
+        col 3n-1: option name   (= screen name col)
+        col 3n  : description
+    where n = screen index (1-based), so screen 1 → cols 1/2/3,
+    screen 2 → cols 4/5/6, screen 3 → cols 7/8/9, …
+    """
+    ws = wb["SCREENS"]
+
+    # Determine screen name columns from row 1
+    row1 = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    screen_name_cols: list[tuple[str, int]] = []  # (name, 1-indexed col)
+    for col_idx, val in enumerate(row1, start=1):
+        if val and isinstance(val, str) and val.strip():
+            screen_name_cols.append((val.strip(), col_idx))
+
+    screens: list[dict] = []
+    for screen_name, name_col in screen_name_cols:
+        checkbox_col = name_col - 1   # 1-indexed
+        desc_col     = name_col + 1   # 1-indexed
+
+        options: list[dict] = []
+        for row in ws.iter_rows(min_row=SCREENS_DATA_ROW, values_only=True):
+            row_list = list(row)
+            # 0-indexed access: checkbox @ checkbox_col-1, name @ name_col-1, desc @ desc_col-1
+            cb  = row_list[checkbox_col - 1] if checkbox_col >= 1 and len(row_list) >= checkbox_col else None
+            opt = row_list[name_col - 1]     if len(row_list) >= name_col     else None
+            dsc = row_list[desc_col - 1]     if len(row_list) >= desc_col     else None
+
+            if opt is None and dsc is None:
+                continue
+
+            if isinstance(cb, bool):
+                include = cb
+            elif isinstance(cb, str):
+                include = cb.strip().upper() in ("TRUE", "YES", "1")
+            else:
+                include = False
+
+            options.append({
+                "include":     include,
+                "option":      str(opt).strip() if opt else "",
+                "description": str(dsc).strip() if dsc else "",
+            })
+
+        screens.append({
+            "name":     screen_name,
+            "name_col": name_col,   # used by COM capture to locate row-2 image cell
+            "options":  options,
+        })
+
+    return screens
+
+
+def _load_vfd(wb) -> dict:
+    """
+    Load VFD parameters from the sheet matching the HMI brand in SUMMARY.
+    Returns {"brand": ..., "sheet": ..., "rows": [[...], ...]}.
+    """
+    machine = _load_machine(wb)
+    hmi_brand = machine.get("HMI", "").upper()
+
+    sheet_name = VFD_SHEET_MAP.get(hmi_brand)
+    if not sheet_name:
+        # Partial match fallback
+        for key, sname in VFD_SHEET_MAP.items():
+            if key in hmi_brand:
+                sheet_name = sname
+                break
+
+    if not sheet_name or sheet_name not in wb.sheetnames:
+        print(f"  WARNING: No VFD sheet found for HMI brand '{hmi_brand}'. "
+              f"Available sheets: {wb.sheetnames}")
+        return {"brand": hmi_brand, "sheet": None, "rows": []}
+
+    ws = wb[sheet_name]
+    rows: list[list] = []
+    for row in ws.iter_rows(values_only=True):
+        cells = [str(c).strip() if c is not None else "" for c in row]
+        if any(cells):
+            rows.append(cells)
+    return {"brand": hmi_brand, "sheet": sheet_name, "rows": rows}
+
+
+def _load_sheet_meta(wb, sheet_name: str) -> dict:
+    """Return sheet name and openpyxl-reported used range for COM image capture."""
+    if sheet_name not in wb.sheetnames:
+        return {"sheet": sheet_name, "range": None}
+    ws = wb[sheet_name]
+    return {"sheet": sheet_name, "range": ws.dimensions}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IMAGE CAPTURE  (Excel COM — Windows + Excel required)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def capture_images(xlsx_path: Path, data: dict, out_dir: Path) -> dict[str, Path]:
+    """
+    Use Excel COM automation to export:
+      - PHYSICAL used range     → physical.png
+      - LUBRICATION used range  → lubrication.png
+      - Each screen's row-2 image cell → screen_00.png, screen_01.png, …
+
+    Returns {key: Path} for each successfully captured image.
+    Prints a warning and returns {} if pywin32 or Excel is unavailable.
     """
     if not _WIN32_AVAILABLE:
-        raise RuntimeError(
-            "pywin32 is not installed. Run:  pip install pywin32\n"
-            "PowerPoint must also be installed on this machine."
-        )
+        print("  WARNING: pywin32 not installed — image capture skipped.\n"
+              "           PHYSICAL, LUBRICATION, and SCREENS sections will be omitted.\n"
+              "           Run:  pip install pywin32")
+        return {}
 
-    pptx_abs = str(pptx_path.resolve())
-    out_abs  = str(out_dir.resolve())
+    out_dir.mkdir(parents=True, exist_ok=True)
+    images: dict[str, Path] = {}
+    xlsx_abs = str(xlsx_path.resolve())
 
-    ppt = win32.Dispatch("PowerPoint.Application")
-    ppt.Visible = True          # some PowerPoint versions require a visible window
+    xl = win32.Dispatch("Excel.Application")
+    xl.Visible = False
+    xl.DisplayAlerts = False
 
     try:
-        prs = ppt.Presentations.Open(pptx_abs, ReadOnly=True,
-                                      Untitled=False, WithWindow=False)
-        n = prs.Slides.Count
-        for i in range(1, n + 1):
-            out_png = os.path.join(out_abs, f"slide{i:04d}.png")
-            # Export(path, filter, scaleWidth, scaleHeight)
-            prs.Slides(i).Export(out_png, "PNG", 1920, 1080)
-        prs.Close()
+        wb_com = xl.Workbooks.Open(xlsx_abs, ReadOnly=True)
+
+        # ── PHYSICAL and LUBRICATION ──────────────────────────────────────────
+        for key in ("physical", "lubrication"):
+            meta = data.get(key, {})
+            sname = meta.get("sheet")
+            rng   = meta.get("range")
+            if not sname or not rng:
+                continue
+            out_png = out_dir / f"{key}.png"
+            if _export_range_as_png(wb_com, sname, rng, out_png):
+                images[key] = out_png
+                print(f"  Captured {key}: {out_png.name}")
+
+        # ── SCREENS row-2 images ──────────────────────────────────────────────
+        for i, screen in enumerate(data.get("screens", [])):
+            col_letter = get_column_letter(screen["name_col"])
+            cell_addr  = f"{col_letter}{SCREENS_IMG_ROW}"
+            out_png    = out_dir / f"screen_{i:02d}.png"
+            if _export_range_as_png(wb_com, "SCREENS", cell_addr, out_png):
+                images[f"screen_{i}"] = out_png
+                print(f"  Captured screen {i:02d}: {screen['name']}")
+            else:
+                print(f"  No image for screen {i:02d}: {screen['name']} (blank or error)")
+
+        wb_com.Close(False)
+    except Exception as e:
+        print(f"  ERROR during Excel COM image capture: {e}")
     finally:
-        ppt.Quit()
+        try:
+            xl.Quit()
+        except Exception:
+            pass
 
-    pngs = sorted(out_dir.glob("slide*.png"),
-                  key=lambda p: int(re.search(r"(\d+)", p.stem).group(1)))
-    return pngs
+    return images
 
 
-def _get_slide_meta(pptx_path: Path) -> list[dict]:
+def _export_range_as_png(wb_com, sheet_name: str, range_addr: str,
+                          out_path: Path) -> bool:
     """
-    Parse each slide's notes for TYPE= and SKIP= directives.
-    Returns list of {index, type, tag, notes_body, skip}.
+    Export an Excel range (or single cell) as a PNG by pasting it into a
+    temporary chart object, then exporting that chart.
+    Returns True on success, False on any error.
     """
-    prs = Presentation(str(pptx_path))
-    meta = []
-    for i, slide in enumerate(prs.slides):
-        notes_text = ""
-        if slide.has_notes_slide:
-            notes_text = slide.notes_slide.notes_text_frame.text or ""
+    try:
+        ws = wb_com.Sheets(sheet_name)
+        rng = ws.Range(range_addr)
 
-        skip = "SKIP=TRUE" in notes_text.upper()
-        slide_type = ""
-        tag = ""
-        notes_body = []
+        # CopyPicture: Appearance=1 (xlScreen), Format=2 (xlBitmap)
+        rng.CopyPicture(Appearance=1, Format=2)
 
-        for line in notes_text.splitlines():
-            line = line.strip()
-            if line.upper().startswith("TYPE="):
-                slide_type = line.split("=", 1)[1].strip().upper()
-            elif line.upper().startswith("TAG="):
-                tag = line.split("=", 1)[1].strip()
-            elif not line.upper().startswith("SKIP="):
-                notes_body.append(line)
+        w = max(float(rng.Width),  50.0)
+        h = max(float(rng.Height), 50.0)
 
-        # Remove leading blank lines and the template prompt text
-        while notes_body and (not notes_body[0] or notes_body[0].startswith("---")):
-            notes_body.pop(0)
-
-        meta.append({
-            "index":      i,
-            "type":       slide_type,
-            "tag":        tag,
-            "notes_body": "\n".join(notes_body).strip(),
-            "skip":       skip,
-        })
-    return meta
-
-
-def extract_module_images(module_folder: Path, tmp_root: Path) -> dict:
-    """
-    Given a module folder containing slides.pptx, returns:
-        {
-          "overview":    [Path, Path, ...],   # up to 4, in slide order
-          "changeover":  [(Path, str), ...],  # (image_path, step_text)
-        }
-    Raises FileNotFoundError if slides.pptx is missing.
-    """
-    pptx_path = module_folder / "slides.pptx"
-    if not pptx_path.exists():
-        raise FileNotFoundError(f"Missing slides.pptx in {module_folder}")
-
-    tmp_dir = tmp_root / module_folder.name
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-
-    png_paths = _pptx_export_slides_com(pptx_path, tmp_dir)
-    meta      = _get_slide_meta(pptx_path)
-
-    if len(png_paths) != len(meta):
-        raise RuntimeError(
-            f"Slide count mismatch for {pptx_path}: "
-            f"{len(meta)} slides in PPTX but {len(png_paths)} PNGs exported."
-        )
-
-    overview   = []
-    changeover = []
-
-    for m, png in zip(meta, png_paths):
-        if m["skip"]:
-            continue
-        if m["type"] == "OVERVIEW":
-            overview.append(png)
-        elif m["type"] == "CHANGEOVER":
-            changeover.append((png, m["notes_body"]))
-
-    return {"overview": overview[:4], "changeover": changeover}
+        # Paste into a throw-away chart placed off-screen
+        chart_obj = ws.ChartObjects().Add(-2000, -2000, w, h)
+        chart     = chart_obj.Chart
+        chart.Paste()
+        chart.Export(str(out_path.resolve()), "PNG")
+        chart_obj.Delete()
+        return out_path.exists()
+    except Exception as e:
+        print(f"    WARNING: capture failed for {sheet_name}!{range_addr}: {e}")
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WORD DOCUMENT ASSEMBLY
+# DOCUMENT BUILDING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def replace_text_in_doc(doc: Document, old: str, new: str):
-    """Replace all occurrences of old with new across paragraphs and table cells."""
+def build_document(data: dict, images: dict[str, Path],
+                   template_path: Path, out_path: Path):
+    """
+    Assemble the manual Word document from data + captured images.
+
+    Sections inserted (in order):
+        Cover placeholders  ← text substitution in template
+        Modules BOM         ← one table per MOD_N
+        PM                  ← filtered table
+        Faults              ← table
+        HMI Params          ← table
+        HMI Screens         ← image + option table per screen
+        Setpoints           ← single image (PHYSICAL)
+        Lubrication         ← single image (LUBRICATION)
+        VFD Params          ← table
+    """
+    machine = data["machine"]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(template_path, out_path)
+    doc = Document(str(out_path))
+
+    # ── Cover substitutions ───────────────────────────────────────────────────
+    serial   = machine.get("SERIAL NUMBER", "")
+    customer = machine.get("CUSTOMER",      "CUSTOMER")
+    mtype    = machine.get("TYPE",          "MODEL")
+    date     = machine.get("DELIVERY DATE", machine.get("MANUAL DATE", ""))
+
+    # Year (YY) for filename — strip century if full year given
+    year_raw = machine.get("YEAR (YY)", "")
+    if not year_raw and date:
+        m = re.search(r"\b(\d{4})\b", date)
+        if m:
+            year_raw = m.group(1)[-2:]
+
+    # SN short (last 4 digits)
+    sn_digits = re.sub(r"\D", "", serial)
+    sn_short  = sn_digits[-4:] if len(sn_digits) >= 4 else sn_digits
+
+    replacements = {
+        "CUSTOMER":         customer,
+        "MODEL: MODEL":     f"MODEL: {mtype}",
+        "SERIAL: 2X-4XXX":  f"SERIAL: {serial}",
+        "MMMM-YYYY":        date,
+    }
+    for old, new in replacements.items():
+        _replace_text(doc, old, new)
+
+    # ── Modules ───────────────────────────────────────────────────────────────
+    for mod in data.get("modules", []):
+        doc.add_heading(mod["display_name"], level=1)
+        if mod["bom"]:
+            _insert_bom_table(doc, mod["bom"])
+        else:
+            doc.add_paragraph("(No BOM data)", style="Normal")
+
+    # ── Preventive Maintenance ────────────────────────────────────────────────
+    pm_rows = data.get("pm", [])
+    if pm_rows:
+        doc.add_heading("Preventive Maintenance", level=1)
+        _insert_pm_table(doc, pm_rows)
+
+    # ── Faults ────────────────────────────────────────────────────────────────
+    faults = data.get("faults", [])
+    if faults:
+        doc.add_heading("Fault Codes", level=1)
+        _insert_faults_table(doc, faults)
+
+    # ── HMI Parameters ───────────────────────────────────────────────────────
+    hmi = data.get("hmi", {})
+    if hmi.get("rows"):
+        doc.add_heading("HMI Parameters", level=1)
+        _insert_generic_table(doc, hmi["rows"])
+
+    # ── HMI Screens ──────────────────────────────────────────────────────────
+    screens = data.get("screens", [])
+    if screens:
+        doc.add_heading("HMI Screens", level=1)
+        for i, screen in enumerate(screens):
+            doc.add_heading(screen["name"], level=2)
+            img_key = f"screen_{i}"
+            if img_key in images:
+                _insert_centered_image(doc, images[img_key], width=DInches(5.5))
+            options = [o for o in screen["options"] if o["include"]]
+            if options:
+                _insert_screen_options_table(doc, options)
+
+    # ── Physical Setpoints ────────────────────────────────────────────────────
+    if "physical" in images:
+        doc.add_heading("Physical Setpoints", level=1)
+        _insert_centered_image(doc, images["physical"], width=DInches(6.0))
+
+    # ── Lubrication ──────────────────────────────────────────────────────────
+    if "lubrication" in images:
+        doc.add_heading("Lubrication", level=1)
+        _insert_centered_image(doc, images["lubrication"], width=DInches(6.0))
+
+    # ── VFD Parameters ───────────────────────────────────────────────────────
+    vfd = data.get("vfd", {})
+    if vfd.get("rows"):
+        brand = vfd.get("brand", "VFD")
+        doc.add_heading(f"VFD Parameters — {brand.title()}", level=1)
+        _insert_generic_table(doc, vfd["rows"])
+
+    doc.save(str(out_path))
+    print(f"\n  Saved: {out_path}\n")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DOCUMENT HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _replace_text(doc: Document, old: str, new: str):
+    """Replace all occurrences of old→new in paragraphs and table cells."""
     for para in doc.paragraphs:
         if old in para.text:
             for run in para.runs:
@@ -269,180 +570,168 @@ def replace_text_in_doc(doc: Document, old: str, new: str):
                                 run.text = run.text.replace(old, new)
 
 
-def insert_2x2_grid(doc: Document, images: list[Path], caption: str = ""):
-    """
-    Insert a 2×2 table of images (comic-book layout) into doc at current position.
-    images: list of 1–4 image paths. Missing slots are left blank.
-    """
-    table = doc.add_table(rows=2, cols=2)
+def _insert_bom_table(doc: Document, bom: list[dict]):
+    headers = ["ITEM #", "DESCRIPTION", "PART #", "CONFIG", "QTY"]
+    table = doc.add_table(rows=1 + len(bom), cols=len(headers))
     table.style = "Table Grid"
-
-    cells = [table.cell(r, c) for r in range(2) for c in range(2)]
-    for i, cell in enumerate(cells):
-        if i < len(images):
-            para = cell.paragraphs[0]
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = para.add_run()
-            run.add_picture(str(images[i]), width=DInches(3.0))
-
-    if caption:
-        cap_para = doc.add_paragraph(caption)
-        cap_para.style = "Caption1"
-
-
-def insert_changeover_steps(doc: Document, steps: list[tuple]):
-    """
-    steps: list of (image_path, step_text)
-    Inserts numbered heading + image + step text for each changeover step.
-    """
-    for i, (img_path, step_text) in enumerate(steps, 1):
-        h = doc.add_paragraph(f"Step {i}", style="Heading2")
-        para = doc.add_paragraph()
-        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = para.add_run()
-        run.add_picture(str(img_path), width=DInches(5.5))
-        if step_text:
-            doc.add_paragraph(step_text, style="NoSpacing")
-
-
-def insert_bom_table(doc: Document, bom_rows: list[dict]):
-    """Insert a Bill of Materials table."""
-    headers = ["ITEM #", "PART NUMBER", "DESCRIPTION", "QTY",
-               "MATERIAL", "VENDOR", "NOTES"]
-    table = doc.add_table(rows=1 + len(bom_rows), cols=len(headers))
-    table.style = "Table Grid"
-
-    hdr_row = table.rows[0]
     for ci, h in enumerate(headers):
-        cell = hdr_row.cells[ci]
+        cell = table.rows[0].cells[ci]
         cell.text = h
-        for run in cell.paragraphs[0].runs:
-            run.bold = True
+        cell.paragraphs[0].runs[0].bold = True
+    for ri, row_data in enumerate(bom):
+        vals = [row_data["item"], row_data["description"], row_data["part_number"],
+                row_data["config"], row_data["qty"]]
+        for ci, v in enumerate(vals):
+            table.rows[ri + 1].cells[ci].text = v
+    doc.add_paragraph()
 
-    for ri, bom in enumerate(bom_rows):
-        data_row = table.rows[ri + 1]
-        vals = [bom["item"], bom["part_number"], bom["description"],
-                bom["qty"], bom["material"], bom["vendor"], bom["notes"]]
-        for ci, val in enumerate(vals):
-            data_row.cells[ci].text = str(val)
+
+def _insert_pm_table(doc: Document, pm: list[dict]):
+    headers = ["ITEM", "TASK", "FREQUENCY", "IMG"]
+    table = doc.add_table(rows=1 + len(pm), cols=len(headers))
+    table.style = "Table Grid"
+    for ci, h in enumerate(headers):
+        cell = table.rows[0].cells[ci]
+        cell.text = h
+        cell.paragraphs[0].runs[0].bold = True
+    for ri, row_data in enumerate(pm):
+        vals = [row_data["item"], row_data["task"],
+                row_data["frequency"], row_data["img"]]
+        for ci, v in enumerate(vals):
+            table.rows[ri + 1].cells[ci].text = v
+    doc.add_paragraph()
+
+
+def _insert_faults_table(doc: Document, faults: list[dict]):
+    headers = ["ALARM #", "FAULT NAME", "SEVERITY"]
+    table = doc.add_table(rows=1 + len(faults), cols=len(headers))
+    table.style = "Table Grid"
+    for ci, h in enumerate(headers):
+        cell = table.rows[0].cells[ci]
+        cell.text = h
+        cell.paragraphs[0].runs[0].bold = True
+    for ri, f in enumerate(faults):
+        vals = [f["number"], f["name"], f["severity"]]
+        for ci, v in enumerate(vals):
+            table.rows[ri + 1].cells[ci].text = v
+    doc.add_paragraph()
+
+
+def _insert_generic_table(doc: Document, rows: list[list]):
+    """Insert a plain table from a list-of-lists. First row is bold header."""
+    if not rows:
+        return
+    max_cols = max(len(r) for r in rows)
+    table = doc.add_table(rows=len(rows), cols=max_cols)
+    table.style = "Table Grid"
+    for ri, row_data in enumerate(rows):
+        for ci in range(max_cols):
+            val = row_data[ci] if ci < len(row_data) else ""
+            cell = table.rows[ri].cells[ci]
+            cell.text = val
+            if ri == 0:
+                if cell.paragraphs[0].runs:
+                    cell.paragraphs[0].runs[0].bold = True
+    doc.add_paragraph()
+
+
+def _insert_screen_options_table(doc: Document, options: list[dict]):
+    headers = ["OPTION", "DESCRIPTION"]
+    table = doc.add_table(rows=1 + len(options), cols=2)
+    table.style = "Table Grid"
+    for ci, h in enumerate(headers):
+        cell = table.rows[0].cells[ci]
+        cell.text = h
+        cell.paragraphs[0].runs[0].bold = True
+    for ri, opt in enumerate(options):
+        table.rows[ri + 1].cells[0].text = opt["option"]
+        table.rows[ri + 1].cells[1].text = opt["description"]
+    doc.add_paragraph()
+
+
+def _insert_centered_image(doc: Document, img_path: Path, width=None):
+    para = doc.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = para.add_run()
+    kwargs = {}
+    if width:
+        kwargs["width"] = width
+    run.add_picture(str(img_path), **kwargs)
+    doc.add_paragraph()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MAIN GENERATION PIPELINE
+# MAIN PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate(config_path: Path):
-    config = load_config(config_path)
-    machine = config["machine"]
-    modules = [m for m in config["modules"] if m["include"]]
+def generate(config_path: Path, json_only: bool = False):
+    if not json_only:
+        print(f"\n  Config : {config_path}")
 
-    # ── Determine output filename ─────────────────────────────────────────────
-    yy     = machine.get("YEAR (YY)", "XX")
-    serial = machine.get("SERIAL NUMBER", "0000").replace("-", "")
-    sn_short = serial[-4:] if len(serial) >= 4 else serial
-    customer = machine.get("CUSTOMER", "CUSTOMER").upper()
-    model    = machine.get("MODEL", "MODEL").upper()
-    out_name = f"{yy}-{sn_short} - {customer} - {model}.docx"
+    # 1. Load all data
+    data = load_data(config_path)
+    machine = data["machine"]
+
+    # ── --json mode: dump data and exit ──────────────────────────────────────
+    if json_only:
+        print(json.dumps(data, indent=2, default=str))
+        return
+
+    # 2. Determine output filename
+    serial   = machine.get("SERIAL NUMBER", "0000")
+    customer = machine.get("CUSTOMER",      "CUSTOMER").upper()
+    mtype    = machine.get("TYPE",          "MODEL").upper()
+    date     = machine.get("DELIVERY DATE", machine.get("MANUAL DATE", ""))
+
+    sn_digits = re.sub(r"\D", "", serial)
+    sn_short  = sn_digits[-4:] if len(sn_digits) >= 4 else sn_digits
+
+    year_raw = machine.get("YEAR (YY)", "")
+    if not year_raw and date:
+        m = re.search(r"\b(\d{4})\b", date)
+        if m:
+            year_raw = m.group(1)[-2:]
+    yy = year_raw or "XX"
+
+    # Sanitise customer/type for filename
+    safe_customer = re.sub(r'[\\/*?:"<>|]', "", customer)
+    safe_type     = re.sub(r'[\\/*?:"<>|]', "", mtype)
+    out_name = f"{yy}-{sn_short} - {safe_customer} - {safe_type}.docx"
     out_path = OUTPUT_DIR / out_name
-    OUTPUT_DIR.mkdir(exist_ok=True)
 
-    print(f"\n  Output : {out_path}")
-    print(f"  Modules: {[m['folder'] for m in modules]}\n")
+    print(f"  Output : {out_path}")
+    print(f"  Modules: {[m['display_name'] for m in data['modules']]}")
+    print(f"  VFD    : {data['vfd'].get('sheet', 'none')}")
+    print(f"  PM rows: {len(data['pm'])}")
+    print(f"  Faults : {len(data['faults'])}")
+    print(f"  Screens: {len(data['screens'])}\n")
 
-    # ── Clone template ────────────────────────────────────────────────────────
     if not TEMPLATE_DOCX.exists():
         sys.exit(f"ERROR: {TEMPLATE_DOCX} not found.")
-    shutil.copy(TEMPLATE_DOCX, out_path)
-    doc = Document(str(out_path))
 
-    # ── Replace cover + header placeholders ───────────────────────────────────
-    replacements = {
-        "CUSTOMER":           machine.get("CUSTOMER", "CUSTOMER"),
-        "MODEL: MODEL":       f"MODEL: {machine.get('MODEL', 'MODEL')}",
-        "SERIAL: 2X-4XXX":   f"SERIAL: {machine.get('SERIAL NUMBER', '??-????')}",
-        "MMMM-YYYY":          machine.get("MANUAL DATE", ""),
-    }
-    for old, new in replacements.items():
-        replace_text_in_doc(doc, old, new)
-
-    # ── Populate ComboBox content controls (film specs) ───────────────────────
-    # TODO: iterate doc.element.body to find w:sdt tags and set w:t values
-    # for the 6 film spec controls. (Requires direct XML manipulation.)
-
-    # ── Process modules — find xXxMODULExXx paragraphs and expand ─────────────
+    # 3. Capture images via Excel COM
     with tempfile.TemporaryDirectory() as tmp_root:
-        tmp_root = Path(tmp_root)
+        tmp_dir = Path(tmp_root)
+        images  = capture_images(config_path, data, tmp_dir)
 
-        # Collect all overview images + changeover steps per module
-        module_data = {}
-        for m in modules:
-            folder = MODULES_DIR / m["folder"]
-            if not folder.exists():
-                print(f"  WARNING: module folder not found: {folder} — skipping.")
-                continue
-            try:
-                imgs = extract_module_images(folder, tmp_root)
-                module_data[m["folder"]] = {**m, **imgs}
-                print(f"  [{m['folder']}] overview={len(imgs['overview'])}  "
-                      f"changeover={len(imgs['changeover'])}")
-            except FileNotFoundError as e:
-                print(f"  WARNING: {e} — skipping.")
-
-        # Walk paragraphs and replace MODULE placeholders
-        # Each xXxMODULExXx occurrence marks one module slot (in order).
-        module_iter = iter([d for d in module_data.values()])
-        para_list   = list(doc.paragraphs)
-
-        for para in para_list:
-            if MODULE_PLACEHOLDER not in para.text:
-                continue
-            try:
-                m = next(module_iter)
-            except StopIteration:
-                # More placeholders than modules — clear remaining
-                for run in para.runs:
-                    run.text = ""
-                continue
-
-            # Clear the placeholder paragraph (we'll insert after it)
-            for run in para.runs:
-                run.text = ""
-
-            # Insert section heading
-            # (In practice we'd insert before/after para using docx XML tricks;
-            #  for now we append to end of doc as a structural stub.)
-            doc.add_heading(m["display_name"], level=1)
-
-            # 2×2 image grid
-            if m["overview"]:
-                insert_2x2_grid(doc, m["overview"], caption=m.get("description", ""))
-            elif m.get("description"):
-                doc.add_paragraph(m["description"], style="NoSpacing")
-
-            # Changeover
-            if m.get("co_include") and m.get("changeover"):
-                doc.add_heading("Changeover Procedure", level=2)
-                insert_changeover_steps(doc, m["changeover"])
-
-            # BOM
-            bom_rows = config["bom"].get(m["folder"], [])
-            if bom_rows:
-                doc.add_heading("Bill of Materials", level=2)
-                insert_bom_table(doc, bom_rows)
-
-    doc.save(str(out_path))
-    print(f"\n  Saved: {out_path}\n")
+        # 4. Build the document
+        build_document(data, images, TEMPLATE_DOCX, out_path)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Polypack Manual Generator")
+    parser = argparse.ArgumentParser(description="Polypack Manual Generator v2")
     parser.add_argument(
         "--config", "-c",
         required=True,
         type=Path,
-        help="Path to machine_config_template.xlsx (or a filled copy)"
+        help="Path to the machine Excel workbook (.xlsx)"
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Dump extracted data as JSON and exit (no Word doc generated)"
     )
     args = parser.parse_args()
-    generate(args.config)
+    generate(args.config, json_only=args.json)
