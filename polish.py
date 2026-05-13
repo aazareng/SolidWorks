@@ -461,6 +461,15 @@ def read_print_table_opxl(wb_opxl) -> list[dict]:
                 stype = ""
                 if type_col:
                     stype = str(ws_admin.cell(r, type_col).value or "").strip().lower()
+                # Fall back to A1 note TYPE= for sheets not classified by tbl_PRINT
+                if stype in ("", "regular") and name in wb_opxl.sheetnames:
+                    try:
+                        meta = _read_sheet_meta(wb_opxl[name])
+                        mtype = meta.get("TYPE", "").lower()
+                        if mtype and mtype != "regular":
+                            stype = mtype
+                    except Exception:
+                        pass
                 if not stype:
                     stype = _sheet_type_from_name(name)
                 items.append({"name": name, "type": stype})
