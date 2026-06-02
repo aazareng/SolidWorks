@@ -23,9 +23,12 @@ def fix_iframe_titles(html):
     changed = False
     seen_titles = {}
     for iframe in soup.find_all("iframe"):
+        src = iframe.get("src", "")
+        if "youtube" not in src and "youtu.be" not in src:
+            continue
         title = iframe.get("title", "").strip()
         if not title:
-            title = "Video"
+            title = "YouTube video player"
             iframe["title"] = title
             changed = True
         if title in seen_titles:
