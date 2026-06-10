@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <RootNamespace>HelloWorldAddIn</RootNamespace>
+    <AssemblyName>HelloWorldAddIn</AssemblyName>
+    <Platforms>x64</Platforms>
+
+    <!-- Required for PDM to load the add-in via COM -->
+    <RegisterForComInterop>true</RegisterForComInterop>
+    <ComVisible>true</ComVisible>
+    <Guid>5C3F1A2B-7E4D-4A1B-9C3E-1234567890AB</Guid>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="UseWindowsForms" Condition="false" />
+    <PackageReference Include="System.Windows.Forms" Condition="false" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Update HintPath to your local PDM install, e.g.:
+      C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS PDM\EPDM.Interop.epdm.dll
+    -->
+    <Reference Include="EPDM.Interop.epdm">
+      <HintPath>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS PDM\EPDM.Interop.epdm.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+  </ItemGroup>
+
+</Project>
