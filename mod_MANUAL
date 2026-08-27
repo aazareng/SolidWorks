@@ -1,0 +1,426 @@
+Option Explicit
+
+Private Const PYTHON_PATH As String = "python"
+Private Const POLISH_PY  As String = "C:\Users\aazar\Downloads\polish.py"
+
+
+' ============================================================
+' ENTRY POINT
+' ============================================================
+Public Sub ExportImages_Then_RunPolish()
+
+    Dim wb As Workbook
+    Dim wsAdmin As Worksheet
+    Dim tbl As ListObject
+    Dim r As ListRow
+    Dim ws As Worksheet
+    Dim assetsRoot As String
+    Dim outHtmlDir As String
+    Dim returnSheet As String
+
+    Set wb = ActiveWorkbook
+    returnSheet = wb.ActiveSheet.Name
+
+    If Len(wb.Path) = 0 Then
+        MsgBox "Workbook must be saved first.", vbCritical
+        Exit Sub
+    End If
+
+    outHtmlDir = wb.Path
+    assetsRoot = wb.Path & "\assets"
+    EnsureDir assetsRoot
+
+    ' ---- ADMIN.tbl_PRINT ----
+    Set wsAdmin = wb.Worksheets("ADMIN")
+    Set tbl = wsAdmin.ListObjects("tbl_PRINT")
+
+    ' ---- process each sheet ----
+    For Each r In tbl.ListRows
+        Set ws = ResolvePrintSheet(wb, tbl, r)
+        If ws Is Nothing Then GoTo NextRow
+
+        ExportSheetImages ws, assetsRoot
+
+NextRow:
+    Next r
+
+    ' ---- run python ----
+    Shell _
+        PYTHON_PATH & " """ & POLISH_PY & _
+        """ --xlsx """ & wb.FullName & _
+        """ --out """ & outHtmlDir & """", _
+        vbNormalFocus
+
+    wb.Sheets(returnSheet).Activate
+End Sub
+
+
+' ============================================================
+' DISPATCH: read A1 note metadata, choose export strategy
+' ============================================================
+Private Sub ExportSheetImages(ws As Worksheet, assetsRoot As String)
+
+    Dim meta As Object
+    Set meta = ReadSheetMeta(ws)
+
+    If UCase(meta("INCLUDE")) = "FALSE" Then Exit Sub
+
+    ' Auto-detect SCREENS by sheet name (note: A1 note may omit TYPE=SCREENS).
+    If UCase(meta("TYPE")) = "REGULAR" And UCase(ws.Name) = "SCREENS" Then
+        meta("TYPE") = "SCREENS"
+    End If
+
+    ' Normalise sections into a trimmed, upper-case array
+    Dim rawSec() As String
+    rawSec = Split(meta("SECTIONS"), ",")
+    Dim sections() As String
+    ReDim sections(UBound(rawSec))
+    Dim i As Integer
+    For i = 0 To UBound(rawSec)
+        sections(i) = UCase(Trim(rawSec(i)))
+    Next i
+
+    Select Case UCase(meta("TYPE"))
+        Case "SCREENS"
+            ExportScreenImages ws, assetsRoot
+        Case Else
+            ' MODULE, TS, REGULAR, SETTINGS:
+            ' Single top-to-bottom scan; each image is filed under the
+            ' section whose header row was most recently encountered.
+            ExportSectionedImages ws, assetsRoot, sections
+    End Select
+End Sub
+
+
+' ============================================================
+' SECTION-AWARE EXPORT
+' Scans column A top-to-bottom.
+'   - When col A value matches a SECTIONS name  → switch current section
+'   - When col A value = "Picture"              → export to current section folder
+' Section headers and Picture placeholders are merged cells whose
+' top-left corner sits in column A.
+' ============================================================
+Private Sub ExportSectionedImages(ws As Worksheet, _
+                                  assetsRoot As String, _
+                                  sections() As String)
+
+    Dim sheetDir As String
+    sheetDir = assetsRoot & "\" & CleanName(ws.Name)
+    EnsureDir sheetDir
+
+    Dim imgCnt() As Long
+    ReDim imgCnt(UBound(sections))
+    Dim currentSec As Integer
+    currentSec = 0
+
+    ws.Activate
+    Dim lastR As Long
+    lastR = LastPrintableRow(ws)
+
+    Dim r As Long, si As Integer
+    Dim c As Range, cap As Range, tc As ChartObject
+    Dim cellVal As String, secDir As String, fn As String
+
+    For r = 1 To lastR
+        Set c = ws.Cells(r, 1)
+
+        ' Skip interior rows of a vertical merge
+        If c.MergeCells Then
+            If c.MergeArea.Cells(1, 1).Row <> r Then GoTo NextRow
+        End If
+
+        ' Read .Formula (not .Value) — for place-in-cell images,
+        ' .Value returns Error 2015 but .Formula returns "Picture".
+        ' For plain text section headers, .Formula returns the text.
+        cellVal = ""
+        On Error Resume Next
+        cellVal = CStr(c.Formula)
+        cellVal = Replace(cellVal, Chr(10), "")
+        cellVal = Replace(cellVal, Chr(13), "")
+        cellVal = UCase(Trim(cellVal))
+        On Error GoTo 0
+
+        ' ---- Section header → advance current section ----
+        For si = 0 To UBound(sections)
+            If cellVal = sections(si) Then
+                currentSec = si
+                GoTo NextRow
+            End If
+        Next si
+
+        ' ---- Picture placeholder → export to current section folder ----
+        If cellVal = "PICTURE" Then
+            Set cap = c
+            If c.MergeCells Then Set cap = c.MergeArea
+
+            secDir = sheetDir & "\" & CleanName(sections(currentSec))
+            EnsureDir secDir
+            imgCnt(currentSec) = imgCnt(currentSec) + 1
+            fn = "img_" & Format(imgCnt(currentSec), "000") & ".png"
+
+            On Error Resume Next
+            cap.Select
+            Selection.CopyPicture
+            Set tc = ws.ChartObjects.Add(cap.Left, cap.Top, cap.Width, cap.Height)
+            tc.Activate
+            DoEvents
+            tc.Chart.Paste
+            DoEvents
+            Application.Wait Now + TimeSerial(0, 0, 0)
+            DoEvents
+            tc.Chart.Export secDir & "\" & fn
+            DoEvents
+            tc.Delete
+            On Error GoTo 0
+        End If
+
+NextRow:
+    Next r
+End Sub
+
+
+' ============================================================
+' SCREENS EXPORT
+' Layout contract:
+'   Row 1 – screen title in a 2-column merged cell per screen
+'            (A1:B1 = screen 1, C1:D1 = screen 2, …)
+'   Row 2 – place-in-cell screenshot spanning the same 2-column pair
+' Strategy: walk row 1 for merged cells, derive column pairs, export
+' each pair's row-2 range.  Output: assets\SCREENS\<title>.png
+' ============================================================
+Private Sub ExportScreenImages(ws As Worksheet, assetsRoot As String)
+
+    Dim outDir As String
+    outDir = assetsRoot & "\" & CleanName(ws.Name)
+    EnsureDir outDir
+
+    ws.Activate
+    Application.ScreenUpdating = False
+
+    ' ---- Build list of column groups from row 1 merged cells ----
+    Dim groups() As Variant   ' (gc1, gc2, title)
+    Dim groupCount As Long
+    groupCount = 0
+
+    Dim mr As Range
+    Dim c As Range
+
+    For Each c In ws.Rows(1).Cells
+        If c.MergeCells Then
+            Set mr = c.MergeArea
+            ' Only process once per merged block (top-left cell only)
+            If c.Address = mr.Cells(1, 1).Address Then
+                If mr.Columns.Count > 1 Then
+                    Dim title As String
+                    title = Trim(Nz(mr.Cells(1, 1).Value))
+                    If title <> "" Then
+                        groupCount = groupCount + 1
+                        ReDim Preserve groups(0 To 2, 0 To groupCount - 1)
+                        groups(0, groupCount - 1) = mr.Column
+                        groups(1, groupCount - 1) = mr.Column + mr.Columns.Count - 1
+                        groups(2, groupCount - 1) = title
+                    End If
+                End If
+            End If
+        End If
+    Next c
+
+    If groupCount = 0 Then
+        Application.ScreenUpdating = True
+        Exit Sub
+    End If
+
+    ' ---- Sort groups by column (MergedCells collection order is not guaranteed) ----
+    Dim i As Long, j As Long
+    For i = 0 To groupCount - 2
+        For j = i + 1 To groupCount - 1
+            If groups(0, j) < groups(0, i) Then
+                Dim tmpC1 As Long, tmpC2 As Long, tmpT As String
+                tmpC1 = groups(0, i): tmpC2 = groups(1, i): tmpT = groups(2, i)
+                groups(0, i) = groups(0, j): groups(1, i) = groups(1, j): groups(2, i) = groups(2, j)
+                groups(0, j) = tmpC1:         groups(1, j) = tmpC2:         groups(2, j) = tmpT
+            End If
+        Next j
+    Next i
+
+    ' ---- Export each screen's row-2 image ----
+    Dim imgRow As Long
+    imgRow = 2
+
+    For i = 0 To groupCount - 1
+        Dim gc1 As Long, gc2 As Long, sTitle As String
+        gc1 = groups(0, i)
+        gc2 = groups(1, i)
+        sTitle = groups(2, i)
+
+        Dim cap As Range
+        Set cap = ws.Range(ws.Cells(imgRow, gc1), ws.Cells(imgRow, gc2))
+
+        ' Only export if the top-left cell has a place-in-cell image
+        Dim cellFormula As String
+        cellFormula = ""
+        On Error Resume Next
+        cellFormula = UCase(Trim(cap.Cells(1, 1).Formula))
+        On Error GoTo 0
+        If cellFormula <> "PICTURE" Then GoTo NextScreen
+
+        Dim fn As String
+        fn = outDir & "\" & CleanName(sTitle) & ".png"
+
+        Dim tc As ChartObject
+        On Error Resume Next
+        cap.Select
+        Selection.CopyPicture Appearance:=xlScreen, Format:=xlPicture
+        Set tc = ws.ChartObjects.Add(cap.Left, cap.Top, cap.Width, cap.Height)
+        tc.Activate
+        DoEvents
+        tc.Chart.Paste
+        DoEvents
+        Application.Wait Now + TimeSerial(0, 0, 0)
+        DoEvents
+        tc.Chart.Export fn
+        DoEvents
+        tc.Delete
+        On Error GoTo 0
+
+NextScreen:
+    Next i
+
+    Application.ScreenUpdating = True
+End Sub
+
+
+' ============================================================
+' FLAT EXPORT  (legacy — no longer used for SCREENS)
+' ============================================================
+Private Sub ExportFlatImages(ws As Worksheet, _
+                             assetsRoot As String, _
+                             sectionName As String)
+
+    Dim outDir As String
+    outDir = assetsRoot & "\" & CleanName(ws.Name) & "\" & CleanName(sectionName)
+    EnsureDir assetsRoot & "\" & CleanName(ws.Name)
+    EnsureDir outDir
+
+    ws.Activate
+    Dim lastR As Long
+    lastR = LastPrintableRow(ws)
+    Dim imgIdx As Long
+    imgIdx = 1
+
+    Dim r As Long, c As Range, cap As Range, tc As ChartObject, fn As String
+    For r = lastR To 1 Step -1
+        Set c = ws.Cells(r, 1)
+
+        On Error Resume Next
+        If Nz(c.Value) = "Picture" Then
+            Set cap = c
+            If c.MergeCells Then Set cap = c.MergeArea
+
+            If cap.Width > 1 And cap.Height > 1 Then
+                fn = "img_" & Format(imgIdx, "000") & ".png"
+
+                cap.Select
+                Selection.CopyPicture
+
+                Set tc = ws.ChartObjects.Add(cap.Left, cap.Top, cap.Width, cap.Height)
+                tc.Activate
+                DoEvents
+                tc.Chart.Paste
+                DoEvents
+                Application.Wait Now + TimeSerial(0, 0, 0)
+                DoEvents
+                tc.Chart.Export outDir & "\" & fn
+                DoEvents
+                tc.Delete
+                imgIdx = imgIdx + 1
+            End If
+        End If
+        On Error GoTo 0
+    Next r
+End Sub
+
+
+' ============================================================
+' READ METADATA FROM A1 NOTE
+' Format: KEY=VALUE;KEY=VALUE
+' Defaults: INCLUDE=TRUE, TYPE=REGULAR, SECTIONS=OVERVIEW
+' ============================================================
+Private Function ReadSheetMeta(ws As Worksheet) As Object
+
+    Dim meta As Object
+    Set meta = CreateObject("Scripting.Dictionary")
+    meta("INCLUDE")  = "TRUE"
+    meta("TYPE")     = "REGULAR"
+    meta("SECTIONS") = "OVERVIEW"
+
+    Dim txt As String
+    On Error Resume Next
+    txt = ws.Range("A1").NoteText
+    On Error GoTo 0
+
+    Dim parts() As String, p As Variant, kv() As String
+    parts = Split(txt, ";")
+    For Each p In parts
+        kv = Split(Trim(CStr(p)), "=")
+        If UBound(kv) = 1 Then
+            meta(UCase(Trim(kv(0)))) = UCase(Trim(kv(1)))
+        End If
+    Next p
+
+    Set ReadSheetMeta = meta
+End Function
+
+
+' ============================================================
+' HELPERS
+' ============================================================
+Private Sub EnsureDir(p As String)
+    If Dir(p, vbDirectory) = "" Then MkDir p
+End Sub
+
+Private Function ResolvePrintSheet(wb As Workbook, _
+                                   tbl As ListObject, _
+                                   r As ListRow) As Worksheet
+    Dim nm As String, sh As Variant
+
+    nm = Nz(r.Range.Cells(1, tbl.ListColumns("NAME").Index).Value)
+    If nm <> "" Then
+        On Error Resume Next
+        Set ResolvePrintSheet = wb.Worksheets(nm)
+        On Error GoTo 0
+        Exit Function
+    End If
+
+    sh = Nz(r.Range.Cells(1, tbl.ListColumns("Sheet").Index).Value)
+    If sh <> "" Then
+        On Error Resume Next
+        Set ResolvePrintSheet = wb.Worksheets(CLng(sh))
+        On Error GoTo 0
+    End If
+End Function
+
+Private Function LastPrintableRow(ws As Worksheet) As Long
+    Dim pa As String, parts() As String
+    pa = ws.PageSetup.PrintArea
+    If pa <> "" Then
+        parts = Split(pa, ":")
+        LastPrintableRow = ws.Range(parts(UBound(parts))).Row
+    Else
+        LastPrintableRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    End If
+End Function
+
+Private Function Nz(ByVal v As Variant) As String
+    If IsError(v) Or IsNull(v) Then
+        Nz = ""
+    Else
+        Nz = CStr(v)
+    End If
+End Function
+
+Private Function CleanName(s As String) As String
+    s = Replace(s, " ", "_")
+    s = Replace(s, "-", "_")
+    CleanName = s
+End Function
