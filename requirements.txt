@@ -3,3 +3,4 @@ python-docx
 openpyxl
 Pillow
 pywin32
+ezdxf
