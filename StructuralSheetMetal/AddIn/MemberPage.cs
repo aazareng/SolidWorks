@@ -28,7 +28,7 @@ namespace StructuralSheetMetal
         // control ids
         const int GrpProfile = 100, IdStandard = 101, IdType = 102, IdSize = 103, IdTable = 104, IdGauge = 105, IdThickness = 106, IdRadius = 107, IdProfileInfo = 108;
         const int GrpGroups = 200, IdGroupList = 201, IdNewGroup = 202, IdDelGroup = 203;
-        const int GrpPath = 300, IdPathSel = 301, IdCorner = 302, IdGap = 303;
+        const int GrpPath = 300, IdPathSel = 301, IdCorner = 302, IdGap = 303, IdPreview = 304;
         const int GrpLocate = 400, IdSideIn = 401, IdSideOut = 402, IdRotation = 403, IdPierce = 404, IdMirrorH = 405, IdMirrorV = 406, IdAlignSel = 407;
         const int MarkPath = 1, MarkAlign = 2;
         const string NoTable = "(none: type the thickness)";
@@ -43,8 +43,9 @@ namespace StructuralSheetMetal
         IPropertyManagerPageSelectionbox? selPath, selAlign;
         IPropertyManagerPageListbox? lbGroups;
         IPropertyManagerPageOption? optIn, optOut;
-        IPropertyManagerPageCheckbox? ckMirrorH, ckMirrorV;
+        IPropertyManagerPageCheckbox? ckMirrorH, ckMirrorV, ckPreview;
         IPropertyManagerPageLabel? lblProfile;
+        MemberPreview? preview;
 
         readonly ProfileCatalog catalog;
         readonly string catalogSource;
@@ -129,6 +130,8 @@ namespace StructuralSheetMetal
             Lbl(gs, "Corner treatment"); cbCorner = Combo(gs, IdCorner, "What happens where two segments of this group meet");
             cbCorner.AddItems(new[] { "None", "End miter", "End butt 1 (first through)", "End butt 2 (second through)" });
             Lbl(gs, "Gap"); nbGap = Number(gs, IdGap, "Gap between the two members at a corner", (int)swNumberboxUnitType_e.swNumberBox_Length, 0, 0.05, 0.0005, 0);
+            ckPreview = (IPropertyManagerPageCheckbox)gs.AddControl2(IdPreview, check, "Show preview", left, vis, "Temporary bodies: every member as flat legs (no bends, no corner cuts); the current group in blue");
+            ckPreview.Checked = true;
 
             // --- Locate profile
             var gl = (IPropertyManagerPageGroup)page.AddGroupBox(GrpLocate, "Locate profile", grpOpts);
@@ -163,11 +166,26 @@ namespace StructuralSheetMetal
             int n = selMgr.GetSelectedObjectCount2(-1);
             for (int i = 1; i <= n; i++) { string why; var ent = selMgr.GetSelectedObject6(i, -1); if (PathChain.FromEntity(sw, ent, out why) != null) pre.Add(ent); }
             model.ClearSelection2(true);
+            preview = new MemberPreview(sw, model);
             page.Show2(0);
             if (pre.Count > 0) { groups[cur].Path = pre; Reselect(groups[cur]); }
+            RefreshPreview();
         }
 
         public void Close() { try { page?.Close(false); } catch { } }
+
+        /// <summary>Redraw the temporary-body preview from the current state (cheap: a few boxes per member).</summary>
+        void RefreshPreview()
+        {
+            if (preview == null) return;
+            try
+            {
+                if (ckPreview == null || !ckPreview.Checked || profile == null) { preview.Clear(); return; }
+                var spec = BuildSpec();
+                preview.Show(spec, cur);
+            }
+            catch (Exception e) { SwAddin.Log("preview: " + e.Message); try { preview.Clear(); } catch { } }
+        }
 
         void Lbl(IPropertyManagerPageGroup g, string text)
         {
@@ -351,6 +369,7 @@ namespace StructuralSheetMetal
             Reselect(groups[cur]);
             WriteGroupControls();
             RefreshGroupList();
+            RefreshPreview();
         }
 
         // ------------------------------------------------------------------ the build
@@ -421,9 +440,12 @@ namespace StructuralSheetMetal
                 ReadGroupControls();
                 SyncFromSelection();
             }
+            try { preview?.Clear(); } catch { }
         }
         public void AfterClose()
         {
+            try { preview?.Dispose(); } catch { }
+            preview = null;
             if (okPressed) RunBuild();
             page = null;
         }
@@ -437,8 +459,8 @@ namespace StructuralSheetMetal
         public bool OnTabClicked(int id) { return false; }
         public void OnGroupExpand(int id, bool expanded) { }
         public void OnGroupCheck(int id, bool chk) { }
-        public void OnCheckboxCheck(int id, bool chk) { if (!loading) ReadGroupControls(); }
-        public void OnOptionCheck(int id) { if (!loading) ReadGroupControls(); }
+        public void OnCheckboxCheck(int id, bool chk) { if (loading) return; if (id != IdPreview) ReadGroupControls(); RefreshPreview(); }
+        public void OnOptionCheck(int id) { if (loading) return; ReadGroupControls(); RefreshPreview(); }
         public void OnButtonPress(int id)
         {
             if (id == IdNewGroup)
@@ -466,9 +488,10 @@ namespace StructuralSheetMetal
                 WriteGroupControls();
                 RefreshGroupList();
             }
+            RefreshPreview();
         }
         public void OnTextboxChanged(int id, string text) { }
-        public void OnNumberboxChanged(int id, double value) { if (!loading) ReadGroupControls(); }
+        public void OnNumberboxChanged(int id, double value) { if (loading) return; ReadGroupControls(); RefreshPreview(); }
         public void OnNumberBoxTrackingCompleted(int id, double value) { }
         public void OnComboboxEditChanged(int id, string text) { }
         public void OnComboboxSelectionChanged(int id, int item)
@@ -488,11 +511,12 @@ namespace StructuralSheetMetal
                 }
             }
             finally { loading = false; }
+            RefreshPreview();
         }
         public void OnListboxSelectionChanged(int id, int item) { if (id == IdGroupList && !loading) SwitchGroup(item); }
         public void OnListboxRMBUp(int id, int posX, int posY) { }
         public void OnSelectionboxFocusChanged(int id) { }
-        public void OnSelectionboxListChanged(int id, int count) { if (!loading) SyncFromSelection(); }
+        public void OnSelectionboxListChanged(int id, int count) { if (loading) return; SyncFromSelection(); RefreshPreview(); }
         public void OnSelectionboxCalloutCreated(int id) { }
         public void OnSelectionboxCalloutDestroyed(int id) { }
         public bool OnSubmitSelection(int id, object selection, int selType, ref string itemText)

@@ -252,6 +252,26 @@ static class Program
         foreach (var r in rejected) Console.WriteLine("rejected " + r);
 
         int rc = 0;
+        if (o.ContainsKey("preview"))
+        {
+            // temporary-body preview, as the page shows it, held for a few seconds (and pictured if --png)
+            var spec = SpecFrom(sw, o, path);
+            using (var pv = new MemberPreview(sw, model))
+            {
+                pv.Show(spec, 0);
+                Console.WriteLine($"preview: {pv.Members} member(s) as temp bodies" + (pv.Problems.Count > 0 ? "; problems: " + string.Join("; ", pv.Problems) : ""));
+                var ppng = Opt(o, "png");
+                if (ppng != null)
+                {
+                    model.ShowNamedView2("*Isometric", 7); model.ViewZoomtofit2();
+                    int e1 = 0, w1 = 0;
+                    var p = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(ppng))!, Path.GetFileNameWithoutExtension(ppng) + "-preview.png");
+                    Console.WriteLine(model.Extension.SaveAs3(p, 0, 1, null, null, ref e1, ref w1) ? "preview picture " + p : "preview picture failed");
+                }
+                System.Threading.Thread.Sleep((int)(Dbl(o, "seconds", 4) * 1000));
+            }
+            Console.WriteLine("preview cleared");
+        }
         if (kind == "hug")
         {
             // 1: a channel hugging the INSIDE of the loop; 2: an angle on the OUTSIDE, touching it

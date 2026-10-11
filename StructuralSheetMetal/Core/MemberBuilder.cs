@@ -171,40 +171,10 @@ namespace StructuralSheetMetal
         Plan MakePlan(MemberGroup group, PathSegment seg, int index)
         {
             var plan = new Plan { Index = index, Group = group, Seg = seg, Name = rep.Prefix + " Member" + index };
-            plan.Prof = spec.Profile.Mirrored(group.MirrorHorizontal, group.MirrorVertical);
-            plan.Pierce = plan.Prof.Pierce(group.PiercePoint ?? plan.Prof.DefaultPierce);
-            plan.Side = group.Side == MaterialSide.Inside ? 1 : -1;
-
-            var d = seg.Dir;
-            var up = group.AlignUp ?? seg.SketchNormal ?? Vec3.UnitZ;
-            if (Vec3.Cross(up, d).Length < 1e-6) up = Vec3.Cross(Vec3.UnitY, d).Length > 1e-6 ? Vec3.UnitY : Vec3.UnitX;
-            var q = (up - d * Vec3.Dot(up, d)).Normalized();
-            var p = Vec3.Cross(d, q).Normalized();
-            if (Math.Abs(group.RotationDeg) > 1e-9)
-            {
-                double a = group.RotationDeg * Math.PI / 180, ca = Math.Cos(a), sa = Math.Sin(a);
-                var p2 = p * ca + q * sa;
-                var q2 = q * ca - p * sa;
-                p = p2; q = q2;
-            }
-            plan.D = d; plan.P = p; plan.Q = q;
-
-            // thickened cloud and inside normals, mm, relative to the pierce point
-            double t = spec.ThicknessMm;
-            int sgn = plan.Prof.SignedArea() >= 0 ? 1 : -1;
-            var pts = plan.Prof.Points.Select(x => x - plan.Pierce).ToList();
-            plan.Mid = pts;
-            for (int k = 0; k + 1 < pts.Count; k++)
-            {
-                var a = pts[k]; var b = pts[k + 1];
-                var dir = b - a; var len = dir.Length;
-                if (len < 1e-9) continue;
-                var n = new P2(-dir.Y / len, dir.X / len) * sgn;   // toward the inside
-                plan.InNormal.Add(n);
-                var off = n * (t * plan.Side);
-                plan.Cloud.Add(a); plan.Cloud.Add(b); plan.Cloud.Add(a + off); plan.Cloud.Add(b + off);
-            }
-            plan.RadialM = plan.Cloud.Count > 0 ? plan.Cloud.Max(c => c.Length) * Mm : 0;
+            var f = MemberFrame.Compute(spec, group, seg);     // shared with the preview
+            plan.Prof = f.Prof; plan.Pierce = f.Pierce; plan.Side = f.Side;
+            plan.D = f.D; plan.P = f.P; plan.Q = f.Q;
+            plan.Mid = f.Mid; plan.InNormal = f.InNormal; plan.Cloud = f.Cloud; plan.RadialM = f.RadialM;
             return plan;
         }
 

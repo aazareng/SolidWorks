@@ -16,7 +16,7 @@ Status, 2026-10-11, SOLIDWORKS 2026 SP2.1:
 |---|---|
 | Engine (`Core\`) — planes, open profiles, base flanges, gauge table, inside/outside, miter / butt 1 / butt 2, gap, rotation, pierce point, mirror, closed loops, folders | **Verified live** from the terminal: L, U, closed rectangle (4 miters), butt joints, outside material, two groups hugging, 16 ga from the sample steel table |
 | CLI (`Cli\ssm.exe`) | Works; the way to test engine changes without touching the add-in |
-| Add-in (`AddIn\`) — command tab, PropertyManager page | Builds and registers; instantiates from COM. **UNTESTED in the SOLIDWORKS UI** (needs a SOLIDWORKS restart on this PC, which had an assembly open). See *Test plan*. |
+| Add-in (`AddIn\`) — command tab, PropertyManager page, live preview | Loads, the tab and page work, OK builds (user-tested 2026-10-11). Preview verified from the CLI (`lab … --preview`). Rotation-box units still to confirm (test plan step 3). |
 
 ## Layout
 
@@ -76,6 +76,13 @@ Inside = the sheet goes to the concave side of the profile (the L's inner corner
 same path with the same profile, one Inside and one Outside, share the profile line: the outer one
 hugs the inner one. For a flat, Inside = +Y of the profile.
 
+* **Show preview** (on by default) — every member as temporary bodies, one thin box per profile leg
+  (no bends, no corner cuts), redrawn on every change; the group being edited is blue, the others
+  yellow. Nothing is created: the bodies vanish when the page closes. To rotate or flip only some
+  segments, give them their own group. `MemberPreview` builds each leg as a planar sheet trimmed by
+  four lines (`CreateTrimmedSheet4`, curves passed as `DispatchWrapper[]`, the same marshalling rule as
+  the cut bodies), extruded along the path with `CreateExtrudedBody` and shown with `IBody2.Display3`.
+
 ## How it builds (`MemberBuilder`)
 
 1. **Plan** — chain the segments; per member set D (along the path), Q ("up": alignment line, else the
@@ -114,8 +121,14 @@ member's outer face plane (+ gap).
 * SOLIDWORKS keeps a loaded add-in DLL locked and the CLR cannot reload a same-version assembly:
   after rebuilding the add-in, **restart SOLIDWORKS**. `register.ps1` deploys to a versioned folder
   when the current one is locked.
-* Per-user COM + `HKCU\SOFTWARE\SolidWorks\AddIns` registration works without admin
-  (`register.ps1` without `-Machine`).
+* The COM class can be registered per-user, but SOLIDWORKS 2026 lists add-ins from
+  `HKLM\SOFTWARE\SolidWorks\AddIns` only, so `register.ps1` writes that one key through an elevated
+  helper (`hklm-addin-key.ps1`, one UAC prompt).
+* The add-in class needs a dispatch interface (`ClassInterfaceType.AutoDispatch`): SOLIDWORKS hands
+  the callback object over through IDispatch and calls toolbar callbacks by name. With
+  `ClassInterfaceType.None`, `SetAddinCallbackInfo2` throws InvalidCastException and "Active" never sticks.
+* Running the command from inside the path sketch is fine: the builder leaves the active sketch first,
+  otherwise `Insert3DSketch` would exit that sketch instead of opening the construction sketch.
 
 ## Test plan for the add-in UI (not yet run)
 
