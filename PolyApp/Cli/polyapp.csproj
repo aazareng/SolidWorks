@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    polyapp — command-line driver for the PolyApp core against the SOLIDWORKS session running on
+    THIS PC. Same Core\ sources as the add-in, so settings, the catalogue and every native command
+    are testable from a terminal without registering anything.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>polyapp</AssemblyName>
+    <RootNamespace>PolyApp</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <SwInstallDir Condition="'$(SW_INSTALL_DIR)' != ''">$(SW_INSTALL_DIR)</SwInstallDir>
+    <SwInstallDir Condition="'$(SwInstallDir)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS</SwInstallDir>
+    <PdmInterop Condition="'$(PDM_INTEROP)' != ''">$(PDM_INTEROP)</PdmInterop>
+    <PdmInterop Condition="'$(PdmInterop)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS PDM\EPDM.Interop.epdm.dll</PdmInterop>
+    <DefineConstants Condition="Exists('$(PdmInterop)')">$(DefineConstants);PDM</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="..\Core\**\*.cs" />
+    <None Include="..\PolyApp.ini" Link="PolyApp.ini" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="SolidWorks.Interop.sldworks">
+      <HintPath>$(SwInstallDir)\api\redist\SolidWorks.Interop.sldworks.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swconst">
+      <HintPath>$(SwInstallDir)\api\redist\SolidWorks.Interop.swconst.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="EPDM.Interop.epdm" Condition="Exists('$(PdmInterop)')">
+      <HintPath>$(PdmInterop)</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

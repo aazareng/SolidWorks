@@ -1,0 +1,71 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PolyApp — SOLIDWORKS add-in (in-process COM server).
+
+    .NET Framework 4.8: SOLIDWORKS loads add-ins through mscoree, so the DLL must be a
+    Framework assembly. Register with install\register.ps1 (RegAsm + the SolidWorks
+    AddIns registry keys), then Tools > Add-Ins > "PolyApp".
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>PolyApp.AddIn</AssemblyName>
+    <RootNamespace>PolyApp</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ComVisible>true</ComVisible>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>0.1.0</Version>
+    <Product>PolyApp for SOLIDWORKS</Product>
+    <Company>Aazar Engineering</Company>
+    <!-- a stable CLSID is what the SolidWorks AddIns registry key points at -->
+    <AddInGuid>5C1D7A2E-9B64-4F3A-8E21-7D0A3B9C4E55</AddInGuid>
+    <DefineConstants>$(DefineConstants);ADDIN</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <SwInstallDir Condition="'$(SW_INSTALL_DIR)' != ''">$(SW_INSTALL_DIR)</SwInstallDir>
+    <SwInstallDir Condition="'$(SwInstallDir)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS</SwInstallDir>
+    <PdmInterop Condition="'$(PDM_INTEROP)' != ''">$(PDM_INTEROP)</PdmInterop>
+    <PdmInterop Condition="'$(PdmInterop)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS PDM\EPDM.Interop.epdm.dll</PdmInterop>
+    <DefineConstants Condition="Exists('$(PdmInterop)')">$(DefineConstants);PDM</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="..\Core\**\*.cs" />
+    <None Include="..\PolyApp.ini" Link="PolyApp.ini" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Icons\*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="SolidWorks.Interop.sldworks">
+      <HintPath>$(SwInstallDir)\api\redist\SolidWorks.Interop.sldworks.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swconst">
+      <HintPath>$(SwInstallDir)\api\redist\SolidWorks.Interop.swconst.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swpublished">
+      <HintPath>$(SwInstallDir)\api\redist\SolidWorks.Interop.swpublished.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="EPDM.Interop.epdm" Condition="Exists('$(PdmInterop)')">
+      <HintPath>$(PdmInterop)</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

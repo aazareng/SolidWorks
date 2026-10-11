@@ -1,0 +1,8 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.reg
+# the macro printout: company data, not source
+PolyAppPro.pdf
