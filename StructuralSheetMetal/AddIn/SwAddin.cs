@@ -13,10 +13,12 @@ namespace StructuralSheetMetal
     /// The SOLIDWORKS add-in: one command, "Structural Sheet Metal Member", in its own CommandManager
     /// tab (part documents) and under Tools. The command opens <see cref="MemberPage"/>.
     /// </summary>
+    // No ClassInterface(None) here: SOLIDWORKS reaches the callbacks (ShowMemberPage, EnableMemberPage) by
+    // name through IDispatch, and SetAddinCallbackInfo2 throws InvalidCastException without a dispatch interface.
     [ComVisible(true)]
     [Guid(AddInGuid)]
     [ProgId("StructuralSheetMetal.AddIn")]
-    [ClassInterface(ClassInterfaceType.None)]
+    [ClassInterface(ClassInterfaceType.AutoDispatch)]
     public class SwAddin : ISwAddin
     {
         public const string AddInGuid = "8F2B6C3A-5D41-4E7B-9A10-2C6F4B1E7D30";

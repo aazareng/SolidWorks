@@ -22,7 +22,7 @@ namespace StructuralSheetMetal
     /// OK builds through <see cref="MemberBuilder"/> (in AfterClose, once the page is gone).
     /// </summary>
     [ComVisible(true)]
-    [ClassInterface(ClassInterfaceType.None)]
+    [ClassInterface(ClassInterfaceType.AutoDispatch)]
     public class MemberPage : IPropertyManagerPage2Handler9
     {
         // control ids

@@ -280,8 +280,19 @@ namespace StructuralSheetMetal
         void CreatePlanes(List<PlaneReq> reqs)
         {
             if (reqs.Count == 0) return;
+            // The user may still be editing the path sketch (selecting lines from inside it is natural).
+            // Insert3DSketch would then EXIT that sketch instead of opening ours, so leave it first.
+            if (skm.ActiveSketch != null)
+            {
+                model.ClearSelection2(true);
+                if (skm.ActiveSketch.Is3D()) skm.Insert3DSketch(true); else skm.InsertSketch(true);
+                if (skm.ActiveSketch != null) throw new InvalidOperationException("exit the sketch you are editing, then run the command again");
+                rep.Log("left the active sketch before building");
+            }
             model.ClearSelection2(true);
             skm.Insert3DSketch(true);
+            if (skm.ActiveSketch == null || !skm.ActiveSketch.Is3D())
+                throw new InvalidOperationException("could not open the construction 3D sketch (is a sketch or another command still active?)");
             bool addToDb = skm.AddToDB;
             skm.AddToDB = true;      // exact coordinates, no inference
             try
