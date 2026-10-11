@@ -82,6 +82,16 @@ if ($Machine) {
     Write-Host "importing $regfile (per-user)"
     & reg.exe import "$regfile" 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "reg import failed ($LASTEXITCODE)" }
+
+    # SOLIDWORKS 2026 lists add-ins from HKLM\SOFTWARE\SolidWorks\AddIns only (the HKCU copy is ignored
+    # by the Add-Ins dialog), so that one key is written elevated. The COM class stays per-user.
+    $hklm = "HKLM:\SOFTWARE\SolidWorks\AddIns\$guid"
+    if (-not (Test-Path $hklm)) {
+        Write-Host "writing $hklm (UAC prompt)"
+        $keyScript = Join-Path $PSScriptRoot "hklm-addin-key.ps1"
+        $p = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$keyScript`"" -Verb RunAs -Wait -PassThru
+        if ($p.ExitCode -ne 0) { Write-Warning "could not write $hklm (exit $($p.ExitCode)); SOLIDWORKS will not list the add-in" }
+    }
 }
 
 Write-Host "registered $dll"
