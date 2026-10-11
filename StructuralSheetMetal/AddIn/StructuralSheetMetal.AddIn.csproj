@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Structural Sheet Metal — SOLIDWORKS add-in (in-process COM server).
+
+    .NET Framework 4.8: SOLIDWORKS loads add-ins through mscoree, so the DLL must be a
+    Framework assembly. Register with install\register.ps1 (RegAsm + the SolidWorks
+    AddIns registry keys), then Tools > Add-Ins > "Structural Sheet Metal".
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>StructuralSheetMetal.AddIn</AssemblyName>
+    <RootNamespace>StructuralSheetMetal</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ComVisible>true</ComVisible>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>0.1.0</Version>
+    <Product>Structural Sheet Metal for SOLIDWORKS</Product>
+    <Company>Aazar Engineering</Company>
+    <!-- a stable CLSID is what the SolidWorks AddIns registry key points at -->
+    <AddInGuid>8F2B6C3A-5D41-4E7B-9A10-2C6F4B1E7D30</AddInGuid>
+    <DefineConstants>$(DefineConstants);ADDIN</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <SwInstallDir Condition="'$(SW_INSTALL_DIR)' != ''">$(SW_INSTALL_DIR)</SwInstallDir>
+    <SwInstallDir Condition="'$(SwInstallDir)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS</SwInstallDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="..\Core\*.cs" />
+    <None Include="..\Catalog\profiles.json" Link="Catalog\profiles.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Icons\*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="SolidWorks.Interop.sldworks">
+      <HintPath>$(SwInstallDir)\api\redist\SolidWorks.Interop.sldworks.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swconst">
+      <HintPath>$(SwInstallDir)\api\redist\SolidWorks.Interop.swconst.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swpublished">
+      <HintPath>$(SwInstallDir)\api\redist\SolidWorks.Interop.swpublished.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
