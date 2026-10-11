@@ -138,7 +138,8 @@ namespace StructuralSheetMetal
             Lbl(gl, "Material side");
             optIn = (IPropertyManagerPageOption)gl.AddControl2(IdSideIn, option, "Inside (concave side of the profile)", indent, vis, "Sheet goes toward the profile's inner corner");
             optOut = (IPropertyManagerPageOption)gl.AddControl2(IdSideOut, option, "Outside (reverse)", indent, vis, "Sheet goes away from the profile: hugs an Inside member on the same path");
-            Lbl(gl, "Rotation angle"); nbRotation = Number(gl, IdRotation, "Rotate the profile about the path", (int)swNumberboxUnitType_e.swNumberBox_Angle, -360, 360, 5, 0);
+            // the angle box works in RADIANS through the API (it displays degrees); 5° steps
+            Lbl(gl, "Rotation angle"); nbRotation = Number(gl, IdRotation, "Rotate the profile about the path", (int)swNumberboxUnitType_e.swNumberBox_Angle, -2 * Math.PI, 2 * Math.PI, 5 * Math.PI / 180, 0);
             Lbl(gl, "Pierce point"); cbPierce = Combo(gl, IdPierce, "Which point of the profile sits on the path");
             ckMirrorH = (IPropertyManagerPageCheckbox)gl.AddControl2(IdMirrorH, check, "Mirror horizontal", left, vis, "Flip the profile left/right");
             ckMirrorV = (IPropertyManagerPageCheckbox)gl.AddControl2(IdMirrorV, check, "Mirror vertical", left, vis, "Flip the profile up/down");
@@ -307,7 +308,7 @@ namespace StructuralSheetMetal
             nbGap!.Value = g.GapMm / 1000;
             optIn!.Checked = g.Side == MaterialSide.Inside;
             optOut!.Checked = g.Side == MaterialSide.Outside;
-            nbRotation!.Value = g.RotationDeg;
+            nbRotation!.Value = g.RotationDeg * Math.PI / 180;
             ckMirrorH!.Checked = g.MirrorHorizontal;
             ckMirrorV!.Checked = g.MirrorVertical;
             if (g.PiercePoint != null && profile != null)
@@ -326,7 +327,7 @@ namespace StructuralSheetMetal
             g.Corner = (CornerTreatment)Math.Max(0, (int)cbCorner!.CurrentSelection);
             g.GapMm = nbGap!.Value * 1000;
             g.Side = optOut!.Checked ? MaterialSide.Outside : MaterialSide.Inside;
-            g.RotationDeg = nbRotation!.Value;
+            g.RotationDeg = nbRotation!.Value * 180 / Math.PI;
             g.MirrorHorizontal = ckMirrorH!.Checked;
             g.MirrorVertical = ckMirrorV!.Checked;
             g.PiercePoint = Current(cbPierce);

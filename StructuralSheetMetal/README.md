@@ -16,7 +16,7 @@ Status, 2026-10-11, SOLIDWORKS 2026 SP2.1:
 |---|---|
 | Engine (`Core\`) — planes, open profiles, base flanges, gauge table, inside/outside, miter / butt 1 / butt 2, gap, rotation, pierce point, mirror, closed loops, folders | **Verified live** from the terminal: L, U, closed rectangle (4 miters), butt joints, outside material, two groups hugging, 16 ga from the sample steel table |
 | CLI (`Cli\ssm.exe`) | Works; the way to test engine changes without touching the add-in |
-| Add-in (`AddIn\`) — command tab, PropertyManager page, live preview | Loads, the tab and page work, OK builds (user-tested 2026-10-11). Preview verified from the CLI (`lab … --preview`). Rotation-box units still to confirm (test plan step 3). |
+| Add-in (`AddIn\`) — command tab, PropertyManager page, live preview | Loads, the tab, page, preview and OK build work (user-tested 2026-10-11). Rotation box fixed (radians through the API). |
 
 ## Layout
 
@@ -69,7 +69,8 @@ are closed first. Options shared by `lab` and `build`: `--std/--type/--size` or 
   treatment: *End miter*, *End butt 1* (first member through), *End butt 2* (second through), *None*;
   optional *Gap*.
 * **Locate profile** — **Material side: Inside / Outside** (the hug toggle), rotation about the path,
-  pierce point (named points of the shape: Corner, Leg A End, Web Center, Crown Center…), mirror
+  pierce point (every vertex and every segment midpoint of the shape, so a channel offers 7: Web
+  Center, Corner 1/2, Flange 1/2 Mid, Flange 1/2 End; a hat also has Base Center), mirror
   horizontal / vertical, optional alignment line for the profile's "up".
 
 Inside = the sheet goes to the concave side of the profile (the L's inner corner). Two members on the
@@ -136,8 +137,8 @@ member's outer face plane (+ gap).
    ticked; a *Structural Sheet Metal* tab with one button in part documents (menu: Tools).
 2. New part, sketch a 300 × 200 rectangle on Top, exit, select the four lines, press the button: the
    page opens with the four segments listed; OK → four mitered members, folders `SSM1 …`.
-3. Rotation box: type 90 and check the result is a quarter turn (the API's angle numberbox may want
-   radians; if the members come out barely rotated, `MemberPage.ReadGroupControls` needs `* 180 / π`).
+3. Rotation box: type 90 and check the result is a quarter turn. (Confirmed: the angle numberbox
+   works in radians through the API while displaying degrees; the page converts both ways.)
 4. New Group → Outside → same four lines → OK: the hug.
 5. Gauge table dropdown lists the files from File Locations; picking a gauge greys the thickness box
    and sets the radius; the resulting flange shows the gauge in its PropertyManager.

@@ -112,66 +112,64 @@ namespace StructuralSheetMetal
                 case "flat":
                 {
                     double w = Get(prm, "W", 50);
-                    p.Points.Add(new P2(-w / 2, 0)); p.Points.Add(new P2(w / 2, 0));
-                    Named(p, "Center", 0, 0); Named(p, "Left End", -w / 2, 0); Named(p, "Right End", w / 2, 0);
+                    Shape(p, new[] { new P2(-w / 2, 0), new P2(w / 2, 0) },
+                        new[] { "Left End", "Right End" }, new[] { "Center" }, "Center");
                     break;
                 }
                 case "angle":
                 {
                     // Leg A goes UP from the corner, leg B goes RIGHT. Inside = the quadrant between them.
                     double a = Get(prm, "A", 38.1), b = Get(prm, "B", 38.1);
-                    p.Points.Add(new P2(0, a)); p.Points.Add(new P2(0, 0)); p.Points.Add(new P2(b, 0));
-                    Named(p, "Corner", 0, 0); Named(p, "Leg A End", 0, a); Named(p, "Leg B End", b, 0);
-                    Named(p, "Leg A Mid", 0, a / 2); Named(p, "Leg B Mid", b / 2, 0);
+                    Shape(p, new[] { new P2(0, a), new P2(0, 0), new P2(b, 0) },
+                        new[] { "Leg A End", "Corner", "Leg B End" }, new[] { "Leg A Mid", "Leg B Mid" }, "Corner");
                     break;
                 }
                 case "channel":
                 {
                     // Web W along X at the bottom, two flanges F going UP. Inside = above the web.
                     double w = Get(prm, "W", 50), f = Get(prm, "F", 25);
-                    p.Points.Add(new P2(0, f)); p.Points.Add(new P2(0, 0)); p.Points.Add(new P2(w, 0)); p.Points.Add(new P2(w, f));
-                    Named(p, "Web Center", w / 2, 0); Named(p, "Corner 1", 0, 0); Named(p, "Corner 2", w, 0);
-                    Named(p, "Flange 1 End", 0, f); Named(p, "Flange 2 End", w, f);
+                    Shape(p, new[] { new P2(0, f), new P2(0, 0), new P2(w, 0), new P2(w, f) },
+                        new[] { "Flange 1 End", "Corner 1", "Corner 2", "Flange 2 End" }, new[] { "Flange 1 Mid", "Web Center", "Flange 2 Mid" }, "Web Center");
                     break;
                 }
                 case "zee":
                 {
                     // Bottom flange A to the LEFT, web W up, top flange B to the RIGHT.
                     double a = Get(prm, "A", 25), w = Get(prm, "W", 50), b = Get(prm, "B", 25);
-                    p.Points.Add(new P2(-a, 0)); p.Points.Add(new P2(0, 0)); p.Points.Add(new P2(0, w)); p.Points.Add(new P2(b, w));
-                    Named(p, "Bottom Corner", 0, 0); Named(p, "Top Corner", 0, w); Named(p, "Web Center", 0, w / 2);
-                    Named(p, "Flange A End", -a, 0); Named(p, "Flange B End", b, w);
+                    Shape(p, new[] { new P2(-a, 0), new P2(0, 0), new P2(0, w), new P2(b, w) },
+                        new[] { "Flange A End", "Bottom Corner", "Top Corner", "Flange B End" }, new[] { "Flange A Mid", "Web Center", "Flange B Mid" }, "Bottom Corner");
                     break;
                 }
                 case "hat":
                 {
                     // Feet F on the base line, legs H up, crown C across the top. Inside = under the crown.
                     double c = Get(prm, "C", 50), h = Get(prm, "H", 25), f = Get(prm, "F", 20);
-                    p.Points.Add(new P2(-(c / 2 + f), 0)); p.Points.Add(new P2(-c / 2, 0)); p.Points.Add(new P2(-c / 2, h));
-                    p.Points.Add(new P2(c / 2, h)); p.Points.Add(new P2(c / 2, 0)); p.Points.Add(new P2(c / 2 + f, 0));
-                    Named(p, "Base Center", 0, 0); Named(p, "Crown Center", 0, h);
-                    Named(p, "Foot 1 End", -(c / 2 + f), 0); Named(p, "Foot 2 End", c / 2 + f, 0);
+                    Shape(p, new[] { new P2(-(c / 2 + f), 0), new P2(-c / 2, 0), new P2(-c / 2, h), new P2(c / 2, h), new P2(c / 2, 0), new P2(c / 2 + f, 0) },
+                        new[] { "Foot 1 End", "Foot 1 Corner", "Crown Corner 1", "Crown Corner 2", "Foot 2 Corner", "Foot 2 End" },
+                        new[] { "Foot 1 Mid", "Leg 1 Mid", "Crown Center", "Leg 2 Mid", "Foot 2 Mid" }, "Base Center",
+                        new KeyValuePair<string, P2>("Base Center", new P2(0, 0)));
                     break;
                 }
                 case "jay":
                 {
                     // A channel with one short flange: long flange A, web W, short lip B.
                     double w = Get(prm, "W", 50), a = Get(prm, "A", 25), b = Get(prm, "B", 10);
-                    p.Points.Add(new P2(0, a)); p.Points.Add(new P2(0, 0)); p.Points.Add(new P2(w, 0)); p.Points.Add(new P2(w, b));
-                    Named(p, "Corner 1", 0, 0); Named(p, "Corner 2", w, 0); Named(p, "Web Center", w / 2, 0);
-                    Named(p, "Long End", 0, a); Named(p, "Short End", w, b);
+                    Shape(p, new[] { new P2(0, a), new P2(0, 0), new P2(w, 0), new P2(w, b) },
+                        new[] { "Long End", "Corner 1", "Corner 2", "Short End" }, new[] { "Long Flange Mid", "Web Center", "Short Lip Mid" }, "Corner 1");
                     break;
                 }
                 case "polyline":
                 {
                     if (pts == null || pts.Count < 2) throw new ArgumentException("polyline profile needs at least two points");
-                    int i = 0;
+                    var points = new List<P2>();
                     foreach (var xy in pts)
                     {
                         if (xy == null || xy.Length < 2) throw new ArgumentException("polyline point needs [x, y]");
-                        p.Points.Add(new P2(xy[0], xy[1]));
-                        Named(p, "Point " + (++i), xy[0], xy[1]);
+                        points.Add(new P2(xy[0], xy[1]));
                     }
+                    var vn = new string[points.Count]; for (int i = 0; i < vn.Length; i++) vn[i] = "Point " + (i + 1);
+                    var sn = new string[points.Count - 1]; for (int i = 0; i < sn.Length; i++) sn[i] = "Segment " + (i + 1) + " Mid";
+                    Shape(p, points.ToArray(), vn, sn, "Point 1");
                     break;
                 }
                 default:
@@ -180,9 +178,26 @@ namespace StructuralSheetMetal
             return p;
         }
 
-        static void Named(Profile p, string name, double x, double y)
+        /// <summary>
+        /// Fills the profile: its points, and the pierce-point list = every vertex + the midpoint of every
+        /// segment (+ any extras), the default first. A channel therefore offers 7 points, an angle 5.
+        /// </summary>
+        static void Shape(Profile p, P2[] points, string[] vertexNames, string[] segmentNames, string defaultName, params KeyValuePair<string, P2>[] extras)
         {
-            p.NamedPoints.Add(new KeyValuePair<string, P2>(name, new P2(x, y)));
+            if (vertexNames.Length != points.Length) throw new ArgumentException("vertex names must match the points");
+            if (segmentNames.Length != points.Length - 1) throw new ArgumentException("segment names must match the segments");
+            p.Points.AddRange(points);
+            var all = new List<KeyValuePair<string, P2>>();
+            foreach (var e in extras) all.Add(e);
+            for (int i = 0; i < points.Length; i++)
+            {
+                all.Add(new KeyValuePair<string, P2>(vertexNames[i], points[i]));
+                if (i + 1 < points.Length) all.Add(new KeyValuePair<string, P2>(segmentNames[i], (points[i] + points[i + 1]) * 0.5));
+            }
+            // the default goes first: Profile.DefaultPierce is NamedPoints[0]
+            var dflt = all.FindIndex(kv => kv.Key == defaultName);
+            if (dflt > 0) { var d = all[dflt]; all.RemoveAt(dflt); all.Insert(0, d); }
+            p.NamedPoints.AddRange(all);
         }
     }
 
